@@ -9,7 +9,7 @@ if (-not (Test-Path -LiteralPath $taskBinary)) { throw "Build Release first: $ta
 $taskPackage = Join-Path $OutputDirectory 'AE-Locale-Bridge-English-0.2.2-win64'
 New-Item -ItemType Directory -Path $taskPackage -Force | Out-Null
 Copy-Item -LiteralPath $taskBinary -Destination $taskPackage -Force
-foreach ($taskName in @('AE-Locale-Bridge.ini', 'README.md', 'VALIDATION.md', 'LICENSE', 'UPSTREAM.md', 'AUTHORS.md', 'CHANGELOG.md')) {
+foreach ($taskName in @('AE-Locale-Bridge.ini', 'README.md', 'BUILDING.md', 'LICENSE', 'UPSTREAM.md', 'AUTHORS.md', 'CHANGELOG.md')) {
     Copy-Item -LiteralPath (Join-Path $taskRepoRoot $taskName) -Destination $taskPackage -Force
 }
 Copy-Item -LiteralPath (Join-Path $taskRepoRoot 'third_party\minhook\LICENSE.txt') -Destination (Join-Path $taskPackage 'MinHook-LICENSE.txt') -Force

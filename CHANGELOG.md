@@ -2,14 +2,15 @@
 
 The initial AE-UTF8-Fixer implementation is by AdoreLowen. This fork preserves the original MIT notice and history; entries below describe derivative work.
 
-## 0.2.2 — 2026-10-22 (candidate)
+## 0.2.2 — 2026-10-22
 
 - Repair mixed GBK/UTF-8 popup lists item by item when UTF-8 translation items are detectable; preserve the existing all-GBK path, GBK trail bytes equal to 0x7C, empty items, separator tokens, menu count and IDs. Register valid items even when another item is undecodable.
 - Cover PF_EffectUISuite1 Options button labels, sequence setup/resetup effect titles, About text and flagged error messages. Preserve SDK return codes, error flags, parameter data and normal render-path outputs.
 - Make hook installation transactional: restore forwarding pointers before freeing failed trampolines, remove failed registrations and avoid consuming wrapper slots on failed installs.
 - Reproduce the mixed-menu and output-title omissions on the 0.2.1 implementation before fixing them. Add deterministic malformed-input/native-API tests, failure injection and broader mock-host text checks.
 - Share SDK text-field aliases between production code and test fixtures; verify builds with both the supplied May 2023 SDK and repository SDK, including cross-loading the resulting mock hosts and repair binaries.
-- Keep original AdoreLowen attribution, MIT notice and history unchanged. Actual Chinese-patched third-party plugins still need user verification.
+- User retested this version in English AE 24.6.2 and confirmed the tested text, including the previously affected popup options, displays correctly. Other host versions and untested plugins still require real-host verification.
+- Keep original AdoreLowen attribution, MIT notice and history unchanged.
 
 ## 0.2.1 — 2026-10-22 (candidate)
 
