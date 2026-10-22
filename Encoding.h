@@ -10,6 +10,7 @@ enum class SourceEncoding { Auto, GBK, UTF8 };
 enum class BridgeMode { Auto, On, Off };
 struct HostVersion { unsigned major{}, minor{}, patch{}; };
 bool IsSupported(HostVersion version) noexcept;
+bool IsSupportedLanguage(std::string_view language, bool only_english = false) noexcept;
 bool UseLegacyBridge(HostVersion version, BridgeMode mode) noexcept;
 bool IsValidUTF8(std::string_view text) noexcept;
 bool ContainsHan(std::wstring_view text) noexcept;

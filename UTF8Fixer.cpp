@@ -21,7 +21,7 @@
 namespace {
 HMODULE self_module{};
 bridge::SourceEncoding source_encoding = bridge::SourceEncoding::Auto;
-bool legacy_bridge{}, enabled{}, only_english = true;
+bool legacy_bridge{}, enabled{}, only_english{};
 bridge::DecodeFn original_decode = &MultiByteToWideChar;
 bridge::EncodeFn original_encode = &WideCharToMultiByte;
 decltype(&LoadLibraryW) original_load{};
@@ -74,17 +74,18 @@ bridge::HostVersion ReadHostVersion() {
         bytes < sizeof(*info) || info->dwSignature != 0xFEEF04BD) return {};
     return {HIWORD(info->dwFileVersionMS), LOWORD(info->dwFileVersionMS), HIWORD(info->dwFileVersionLS)};
 }
-bool IsEnglish(SPBasicSuite* basic) {
-    if (!basic) return false;
+bool HasSupportedLanguage(SPBasicSuite* basic) {
+    if (!basic || !basic->AcquireSuite || !basic->ReleaseSuite) return false;
     const PFAppSuite6* app{};
     if (basic->AcquireSuite(kPFAppSuite, kPFAppSuiteVersion6, reinterpret_cast<const void**>(&app)) || !app) return false;
     A_char language[PF_APP_LANG_TAG_SIZE]{};
-    auto err = app->PF_AppGetLanguage(language);
+    auto err = app->PF_AppGetLanguage ? app->PF_AppGetLanguage(language) : PF_Err_INTERNAL_STRUCT_DAMAGED;
     basic->ReleaseSuite(kPFAppSuite, kPFAppSuiteVersion6);
     char msg[100]{};
-    sprintf_s(msg, "AE UI language: %.5s", language);
+    sprintf_s(msg, "AE UI language: %.*s", static_cast<int>(sizeof(language)), language);
     Log(msg);
-    return !err && language[0] == 'e' && language[1] == 'n';
+    const auto n = strnlen_s(language, sizeof(language));
+    return !err && n < sizeof(language) && bridge::IsSupportedLanguage({language, n}, only_english);
 }
 std::wstring ConfigValue(const wchar_t* key, const wchar_t* fallback) {
     wchar_t value[128]{};
@@ -100,7 +101,7 @@ void ReadSettings(bridge::HostVersion host) {
     GetTempPathW(32768, temp);
     log_path = std::wstring(temp) + L"AE-Locale-Bridge-" + std::to_wstring(GetCurrentProcessId()) + L".log";
     enabled = ConfigValue(L"Enabled", L"1") == L"1";
-    only_english = ConfigValue(L"OnlyEnglish", L"1") == L"1";
+    only_english = ConfigValue(L"OnlyEnglish", L"0") == L"1";
     const auto source = ConfigValue(L"SourceEncoding", L"auto");
     if (source == L"gbk") source_encoding = bridge::SourceEncoding::GBK;
     else if (source == L"utf8") source_encoding = bridge::SourceEncoding::UTF8;
@@ -112,7 +113,7 @@ void ReadSettings(bridge::HostVersion host) {
     else if (mode != L"auto") { enabled = false; Log("Invalid LegacyBridge; disabled."); }
     legacy_bridge = bridge::UseLegacyBridge(host, policy);
     char msg[200]{};
-    sprintf_s(msg, "AE Locale Bridge 0.2.2; host=%u.%u.%u; ACP=%u; OEMCP=%u; legacy=%u",
+    sprintf_s(msg, "AE Locale Bridge 0.2.3; host=%u.%u.%u; ACP=%u; OEMCP=%u; legacy=%u",
               host.major, host.minor, host.patch, GetACP(), GetOEMCP(), legacy_bridge);
     Log(msg);
 }
@@ -544,7 +545,11 @@ extern "C" __declspec(dllexport) A_Err EntryPointFunc(SPBasicSuite* basic, A_lon
         ReadSettings(version);
         if (!bridge::IsSupported(version)) { Log("AE earlier than 24.0 or unknown executable version; inactive."); return A_Err_NONE; }
         if (!enabled) { Log("Disabled by configuration."); return A_Err_NONE; }
-        if (only_english && !IsEnglish(basic)) { Log("English UI required or language suite unavailable; inactive."); return A_Err_NONE; }
+        if (!HasSupportedLanguage(basic)) {
+            Log(only_english ? "English UI required or language unavailable; inactive."
+                             : "Chinese/English UI required or language unavailable; inactive.");
+            return A_Err_NONE;
+        }
         HMODULE pinned{};
         GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
                           reinterpret_cast<LPCWSTR>(&EntryPointFunc), &pinned);

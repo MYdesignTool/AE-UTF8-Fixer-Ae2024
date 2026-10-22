@@ -2,6 +2,15 @@
 
 The initial AE-UTF8-Fixer implementation is by AdoreLowen. This fork preserves the original MIT notice and history; entries below describe derivative work.
 
+## 0.2.3 — 2026-10-22
+
+- Enable both Chinese and English AE 2024+ interfaces by default, including simplified/traditional Chinese language tags. Preserve `OnlyEnglish=1` as an optional restriction; the shipped INI and missing-INI default now use `OnlyEnglish=0`.
+- Keep AE 2023 and earlier inactive regardless of UI language or forced bridge configuration; these versions do not need this repair tool.
+- Keep unrelated languages and unavailable/invalid host language information inactive. Handle missing language callbacks without dereferencing null pointers.
+- Preserve lossless GBK conversions and cover Chinese UI text with both Chinese and Western code pages, including dynamic parameters, popup round-trips, effect titles and Options labels.
+- Rename runtime packages to `AE-Locale-Bridge-0.2.3-win64.zip`. When upgrading, replace both AEX and INI or set `OnlyEnglish=0` in a retained configuration.
+- Chinese UI activation is covered by automated mock-host tests; real Chinese AE validation remains pending. Previous English AE 24.6.2 user verification applies to 0.2.2.
+
 ## 0.2.2 — 2026-10-22
 
 - Repair mixed GBK/UTF-8 popup lists item by item when UTF-8 translation items are detectable; preserve the existing all-GBK path, GBK trail bytes equal to 0x7C, empty items, separator tokens, menu count and IDs. Register valid items even when another item is undecodable.

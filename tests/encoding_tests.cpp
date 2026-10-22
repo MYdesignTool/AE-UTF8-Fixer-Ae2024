@@ -8,6 +8,16 @@ int main() {
     int checks{};
     using namespace bridge;
     CHECK(IsSupported({24,0,0}) && !IsSupported({23,9,0}) && !IsSupported({}));
+    for (auto language : {"en", "en_US", "en-GB", "EN_US", "zh", "zh_CN", "zh_TW", "zh-Hans", "zh-Hant", "ZH_CN"})
+        CHECK(IsSupportedLanguage(language));
+    for (auto language : {"", "e", "z", "english", "zhcn", "en_", "zh-", "ja_JP", "de_DE", "fr_FR", "unknown"})
+        CHECK(!IsSupportedLanguage(language));
+    CHECK(IsSupportedLanguage("en_US", true));
+    CHECK(!IsSupportedLanguage("zh_CN", true));
+    CHECK(!IsSupportedLanguage("zh_TW", true));
+    CHECK(!UseLegacyBridge({23,6,0}, BridgeMode::Auto));
+    CHECK(!UseLegacyBridge({23,6,0}, BridgeMode::On));
+    CHECK(!UseLegacyBridge({}, BridgeMode::On));
     CHECK(UseLegacyBridge({24,6,0}, BridgeMode::Auto));
     CHECK(UseLegacyBridge({24,0,0}, BridgeMode::Auto));
     CHECK(UseLegacyBridge({25,0,0}, BridgeMode::Auto));

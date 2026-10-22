@@ -6,6 +6,8 @@
 #include <windows.h>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
+#include <cwchar>
 #include <string>
 #include <thread>
 #include <atomic>
@@ -22,6 +24,10 @@
 #define CHECK(expr) do { ++checks; if (!(expr)) { std::printf("FAIL line %d: %s, error=%lu\n", __LINE__, #expr, GetLastError()); return 1; } } while (0)
 namespace {
 const char* language = "en_US";
+std::string language_storage;
+std::string language_status;
+UINT text_code_page = 1252;
+unsigned language_calls{}, language_releases{};
 constexpr const char* utf8 = "\xE4\xB8\xAD\xE6\x96\x87";
 constexpr const char* gbk = "\xD6\xD0\xCE\xC4";
 std::atomic<unsigned> adds{}, updates{};
@@ -38,17 +44,17 @@ PF_Err Add(PF_ProgPtr, PF_ParamIndex, PF_ParamDef* param) {
     if (!ok) passed = false;
     if (std::strcmp(param->u.pd.u.PF_DEF_NAMESPTR, active ? "\xE4\xB8\xAD\xE6\x96\x87|Off|\xE5\x8F\x82\xE6\x95\xB0" : "\xD6\xD0\xCE\xC4|Off|\xB2\xCE\xCA\xFD")) passed = false;
     wchar_t wide[40]{};
-    auto n = MultiByteToWideChar(1252, 0, param->PF_DEF_NAME, -1, wide, 40);
+    auto n = MultiByteToWideChar(text_code_page, 0, param->PF_DEF_NAME, -1, wide, 40);
     if (active && legacy && (n != 3 || std::wstring(wide) != L"\x4E2D\x6587")) passed = false;
     // Popup managers may convert their Unicode item text back to ANSI before
     // displaying it. The old decoder-only bridge loses Chinese at this step.
     if (active && legacy) {
-        const auto bytes = WideCharToMultiByte(1252, 0, wide, -1, nullptr, 0, nullptr, nullptr);
+        const auto bytes = WideCharToMultiByte(text_code_page, 0, wide, -1, nullptr, 0, nullptr, nullptr);
         std::string menu(bytes, '\0');
-        if (!bytes || WideCharToMultiByte(1252, 0, wide, -1, menu.data(), bytes, nullptr, nullptr) != bytes)
+        if (!bytes || WideCharToMultiByte(text_code_page, 0, wide, -1, menu.data(), bytes, nullptr, nullptr) != bytes)
             passed = false;
         wchar_t displayed[40]{};
-        if (MultiByteToWideChar(1252, 0, menu.c_str(), -1, displayed, 40) != n ||
+        if (MultiByteToWideChar(text_code_page, 0, menu.c_str(), -1, displayed, 40) != n ||
             std::wstring(displayed) != std::wstring(wide)) passed = false;
     }
     return PF_Err_NONE;
@@ -64,7 +70,12 @@ PF_Err Update(PF_ProgPtr, PF_ParamIndex, const PF_ParamDef* param) {
         passed = false;
     return PF_Err_NONE;
 }
-PF_Err GetLanguage(A_char* output) { strcpy_s(output, PF_APP_LANG_TAG_SIZE, language); return PF_Err_NONE; }
+PF_Err GetLanguage(A_char* output) {
+    ++language_calls;
+    if (language_status == "unterminated") std::memset(output, 'z', PF_APP_LANG_TAG_SIZE);
+    else strcpy_s(output, PF_APP_LANG_TAG_SIZE, language);
+    return language_status == "error" ? PF_Err_INTERNAL_STRUCT_DAMAGED : PF_Err_NONE;
+}
 A_Err RegisterDeath(AEGP_PluginID, AEGP_DeathHook, AEGP_DeathRefcon) { return A_Err_NONE; }
 PF_Err SetOptions(PF_ProgPtr, const A_char* name) {
     ++options_calls;
@@ -76,14 +87,17 @@ PF_ParamUtilsSuite3 paramsuite{};
 PF_EffectUISuite1 effectsuite{};
 AEGP_RegisterSuite5 registration{};
 SPErr Acquire(const char* name, int32 version, const void** output) {
-    if (!std::strcmp(name, kPFAppSuite) && version == kPFAppSuiteVersion6) *output = &app;
+    if (!std::strcmp(name, kPFAppSuite) && version == kPFAppSuiteVersion6 && language_status != "missing") *output = &app;
     else if (!std::strcmp(name, kPFParamUtilsSuite) && version == kPFParamUtilsSuiteVersion3) *output = &paramsuite;
     else if (!std::strcmp(name, kAEGPRegisterSuite) && version == kAEGPRegisterSuiteVersion5) *output = &registration;
     else if (!std::strcmp(name, kPFEffectUISuite) && version == kPFEffectUISuiteVersion1) *output = &effectsuite;
     else { *output = nullptr; return kSPBadParameterError; }
     return kSPNoError;
 }
-SPErr Release(const char*, int32) { return kSPNoError; }
+SPErr Release(const char* name, int32) {
+    if (!std::strcmp(name, kPFAppSuite)) ++language_releases;
+    return kSPNoError;
+}
 A_Err Metadata2(PF_PluginDataPtr, const A_u_char* name, const A_u_char* match, const A_u_char*, const A_u_char* entry,
                 A_long, A_long, A_long, A_long, const A_u_char*) {
     metadata = reinterpret_cast<const char*>(name);
@@ -98,11 +112,14 @@ A_Err Metadata1(PF_PluginDataPtr ptr, const A_u_char* name, const A_u_char* matc
 }
 int wmain(int argc, wchar_t** argv) {
     int checks{};
-    CHECK(argc >= 3);
-    if (argc > 3) language = "zh_CN";
-    active = MOCK_MAJOR >= 24 && !std::strcmp(language, "en_US");
-    legacy = active && (MOCK_MAJOR < 26 || (MOCK_MAJOR == 26 && MOCK_MINOR < 2));
-    app.PF_AppGetLanguage = &GetLanguage;
+    CHECK(argc == 8);
+    for (const auto c : std::wstring(argv[3])) { CHECK(c < 128); language_storage += static_cast<char>(c); }
+    language = language_storage.c_str();
+    active = !std::wcscmp(argv[4], L"1");
+    legacy = !std::wcscmp(argv[5], L"1");
+    text_code_page = static_cast<UINT>(std::wcstoul(argv[6], nullptr, 10));
+    for (const auto c : std::wstring(argv[7])) { CHECK(c < 128); language_status += static_cast<char>(c); }
+    app.PF_AppGetLanguage = language_status == "null" ? nullptr : &GetLanguage;
     paramsuite.PF_UpdateParamUI = &Update;
     effectsuite.PF_SetOptionsButtonName = &SetOptions;
     registration.AEGP_RegisterDeathHook = &RegisterDeath;
@@ -115,6 +132,9 @@ int wmain(int argc, wchar_t** argv) {
     using Start = A_Err(*)(SPBasicSuite*, A_long, A_long, AEGP_PluginID, AEGP_GlobalRefcon*);
     auto start = reinterpret_cast<Start>(GetProcAddress(plugin, "EntryPointFunc"));
     CHECK(start && !start(&basic, 999, 999, 1, nullptr)); // SDK ABI numbers are NOT product versions.
+    const bool acquired_language = MOCK_MAJOR >= 24 && language_status != "missing";
+    CHECK(language_releases == (acquired_language ? 1u : 0u));
+    CHECK(language_calls == (acquired_language && language_status != "null" ? 1u : 0u));
     auto oldeffect = reinterpret_cast<PF_Err(*)(PF_Cmd, PF_InData*, PF_OutData*, PF_ParamDef*[], PF_LayerDef*, void*)>(
         GetProcAddress(legacy_module, "OldCustomEffect"));
     CHECK(oldeffect);
@@ -195,8 +215,13 @@ int wmain(int argc, wchar_t** argv) {
     wchar_t wide[50]{};
     CHECK(MultiByteToWideChar(1252, 0, "English", -1, wide, 50) == 8 && std::wstring(wide) == L"English");
     CHECK(MultiByteToWideChar(1252, 0, "\xC3\xA9", -1, wide, 50) == 3);
-    std::printf("PASS: %d mock-host checks; AE=%d.%d.%d; UI=%s; active=%d; legacy=%d; adds=%u; updates=%u.\n",
-        checks, MOCK_MAJOR, MOCK_MINOR, MOCK_PATCH, language, active, legacy, adds.load(), updates.load());
+    CHECK(MultiByteToWideChar(936, 0, gbk, -1, wide, 50) == 3 && std::wstring(wide) == L"\x4E2D\x6587");
+    char lossless[20]{};
+    BOOL used_default = TRUE;
+    CHECK(WideCharToMultiByte(936, 0, L"\x4E2D\x6587", -1, lossless, 20, nullptr, &used_default) == 5);
+    CHECK(!std::strcmp(lossless, gbk) && !used_default);
+    std::printf("PASS: %d mock-host checks; AE=%d.%d.%d; UI=%s; text_cp=%u; active=%d; legacy=%d; adds=%u; updates=%u.\n",
+        checks, MOCK_MAJOR, MOCK_MINOR, MOCK_PATCH, language, text_code_page, active, legacy, adds.load(), updates.load());
     // Hooks and module pins intentionally live to process exit.
     return 0;
 }

@@ -1,0 +1,55 @@
+0.2.3 local Release x64 validation; 2026-10-22
+May 2023 SDK: 23/23 tests passed
+PASS: 73 encoding checks, 8 concurrent registry/cache workers.
+PASS: 20480 checks across 4096 deterministic malformed-input/native-API cases.
+PASS: 135 popup checks, 14 menu entries, ANSI question-mark reproduction, 8 concurrent workers.
+PASS: 44 SDK parameter checks, including 14 guarded allocation layouts.
+PASS: 113 hook lifecycle checks, failure rollback, retry and duplicate-target handling.
+PASS: 53 mock-host checks; AE=24.6.2; UI=en_US; text_cp=1252; active=1; legacy=1; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=26.2.0; UI=en_US; text_cp=1252; active=1; legacy=0; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=23.6.0; UI=en_US; text_cp=1252; active=0; legacy=0; adds=804; updates=1.
+PASS: 53 mock-host checks; AE=24.6.2; UI=zh_CN; text_cp=936; active=1; legacy=1; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=24.6.2; UI=zh_CN; text_cp=1252; active=1; legacy=1; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=24.6.2; UI=zh_TW; text_cp=936; active=1; legacy=1; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=26.2.0; UI=zh_CN; text_cp=936; active=1; legacy=0; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=23.6.0; UI=zh_CN; text_cp=936; active=0; legacy=0; adds=804; updates=1.
+PASS: 53 mock-host checks; AE=23.6.0; UI=zh_CN; text_cp=936; active=0; legacy=0; adds=804; updates=1.
+PASS: 53 mock-host checks; AE=24.6.2; UI=en_US; text_cp=1252; active=1; legacy=1; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=24.6.2; UI=zh_CN; text_cp=936; active=1; legacy=1; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=24.6.2; UI=en_US; text_cp=1252; active=1; legacy=1; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=24.6.2; UI=zh_CN; text_cp=936; active=0; legacy=0; adds=804; updates=1.
+PASS: 53 mock-host checks; AE=24.6.2; UI=ja_JP; text_cp=932; active=0; legacy=0; adds=804; updates=1.
+PASS: 58 mock-host checks; AE=24.6.2; UI=zh_CN; text_cp=936; active=0; legacy=0; adds=804; updates=1.
+PASS: 56 mock-host checks; AE=24.6.2; UI=zh_CN; text_cp=936; active=0; legacy=0; adds=804; updates=1.
+PASS: 55 mock-host checks; AE=24.6.2; UI=zh_CN; text_cp=936; active=0; legacy=0; adds=804; updates=1.
+PASS: 63 mock-host checks; AE=24.6.2; UI=zh_CN; text_cp=936; active=0; legacy=0; adds=804; updates=1.
+Repository AE_SDK: 23/23 tests passed
+PASS: 73 encoding checks, 8 concurrent registry/cache workers.
+PASS: 20480 checks across 4096 deterministic malformed-input/native-API cases.
+PASS: 135 popup checks, 14 menu entries, ANSI question-mark reproduction, 8 concurrent workers.
+PASS: 44 SDK parameter checks, including 14 guarded allocation layouts.
+PASS: 113 hook lifecycle checks, failure rollback, retry and duplicate-target handling.
+PASS: 53 mock-host checks; AE=24.6.2; UI=en_US; text_cp=1252; active=1; legacy=1; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=26.2.0; UI=en_US; text_cp=1252; active=1; legacy=0; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=23.6.0; UI=en_US; text_cp=1252; active=0; legacy=0; adds=804; updates=1.
+PASS: 53 mock-host checks; AE=24.6.2; UI=zh_CN; text_cp=936; active=1; legacy=1; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=24.6.2; UI=zh_CN; text_cp=1252; active=1; legacy=1; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=24.6.2; UI=zh_TW; text_cp=936; active=1; legacy=1; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=26.2.0; UI=zh_CN; text_cp=936; active=1; legacy=0; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=23.6.0; UI=zh_CN; text_cp=936; active=0; legacy=0; adds=804; updates=1.
+PASS: 53 mock-host checks; AE=23.6.0; UI=zh_CN; text_cp=936; active=0; legacy=0; adds=804; updates=1.
+PASS: 53 mock-host checks; AE=24.6.2; UI=en_US; text_cp=1252; active=1; legacy=1; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=24.6.2; UI=zh_CN; text_cp=936; active=1; legacy=1; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=24.6.2; UI=en_US; text_cp=1252; active=1; legacy=1; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=24.6.2; UI=zh_CN; text_cp=936; active=0; legacy=0; adds=804; updates=1.
+PASS: 53 mock-host checks; AE=24.6.2; UI=ja_JP; text_cp=932; active=0; legacy=0; adds=804; updates=1.
+PASS: 58 mock-host checks; AE=24.6.2; UI=zh_CN; text_cp=936; active=0; legacy=0; adds=804; updates=1.
+PASS: 56 mock-host checks; AE=24.6.2; UI=zh_CN; text_cp=936; active=0; legacy=0; adds=804; updates=1.
+PASS: 55 mock-host checks; AE=24.6.2; UI=zh_CN; text_cp=936; active=0; legacy=0; adds=804; updates=1.
+PASS: 63 mock-host checks; AE=24.6.2; UI=zh_CN; text_cp=936; active=0; legacy=0; adds=804; updates=1.
+Bidirectional cross-SDK Chinese CP936 mock-host loads:
+PASS: 53 mock-host checks; AE=24.6.2; UI=zh_CN; text_cp=936; active=1; legacy=1; adds=804; updates=2.
+
+PASS: 53 mock-host checks; AE=24.6.2; UI=zh_CN; text_cp=936; active=1; legacy=1; adds=804; updates=2.
+
+0.2.2 published binary: new Chinese no-INI regression fails as expected (exit 1).

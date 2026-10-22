@@ -13,7 +13,16 @@ unsigned long long DecoderHitCount() noexcept { return decoder_hits.load(std::me
 unsigned long long EncoderHitCount() noexcept { return encoder_hits.load(std::memory_order_relaxed); }
 unsigned long long EncoderBufferFailureCount() noexcept { return encoder_buffer_failures.load(std::memory_order_relaxed); }
 bool IsSupported(HostVersion v) noexcept { return v.major >= 24; }
+bool IsSupportedLanguage(std::string_view language, bool only_english) noexcept {
+    if (language.size() < 2 || (language.size() != 2 &&
+        (language.size() < 4 || (language[2] != '_' && language[2] != '-')))) return false;
+    const auto lower = [](char c) { return c >= 'A' && c <= 'Z' ? c + ('a' - 'A') : c; };
+    const bool english = lower(language[0]) == 'e' && lower(language[1]) == 'n';
+    const bool chinese = lower(language[0]) == 'z' && lower(language[1]) == 'h';
+    return english || (!only_english && chinese);
+}
 bool UseLegacyBridge(HostVersion v, BridgeMode mode) noexcept {
+    if (!IsSupported(v)) return false;
     if (mode == BridgeMode::On) return true;
     if (mode == BridgeMode::Off) return false;
     // Compatibility policy based on the upstream 26.2 boundary, not an SDK guarantee.

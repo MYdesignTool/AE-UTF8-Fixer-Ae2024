@@ -1,4 +1,4 @@
-name: Build and test English AE bridge
+name: Build and test Chinese and English AE bridge
 on:
   push:
     branches: [main]
@@ -23,6 +23,6 @@ jobs:
         run: ./scripts/package.ps1
       - uses: actions/upload-artifact@v4
         with:
-          name: AE-Locale-Bridge-English-win64
-          path: dist/AE-Locale-Bridge-English-0.2.2-win64.zip
+          name: AE-Locale-Bridge-win64
+          path: dist/AE-Locale-Bridge-0.2.3-win64.zip
           if-no-files-found: error
