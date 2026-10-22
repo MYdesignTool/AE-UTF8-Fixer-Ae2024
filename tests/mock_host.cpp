@@ -1,5 +1,5 @@
 #include "AEConfig.h"
-#include "AE_Effect.h"
+#include "../SDKCompat.h"
 #include "AE_EffectSuites.h"
 #include "AE_GeneralPlug.h"
 #include "AE_PluginData.h"
@@ -16,6 +16,9 @@
 #ifndef MOCK_MINOR
 #define MOCK_MINOR 6
 #endif
+#ifndef MOCK_PATCH
+#define MOCK_PATCH 0
+#endif
 #define CHECK(expr) do { ++checks; if (!(expr)) { std::printf("FAIL line %d: %s, error=%lu\n", __LINE__, #expr, GetLastError()); return 1; } } while (0)
 namespace {
 const char* language = "en_US";
@@ -23,18 +26,19 @@ constexpr const char* utf8 = "\xE4\xB8\xAD\xE6\x96\x87";
 constexpr const char* gbk = "\xD6\xD0\xCE\xC4";
 std::atomic<unsigned> adds{}, updates{};
 std::atomic<unsigned> alternative_adds{};
+unsigned options_calls{};
 std::atomic<bool> passed{true};
 std::string last_name, last_popup, metadata;
 const char* stable_popup{};
 bool active{}, legacy{};
 PF_Err Add(PF_ProgPtr, PF_ParamIndex, PF_ParamDef* param) {
     ++adds;
-    bool ok = param && !std::strcmp(param->name, active ? utf8 : gbk) &&
+    bool ok = param && !std::strcmp(param->PF_DEF_NAME, active ? utf8 : gbk) &&
               param->uu.id == 1234 && param->u.pd.num_choices == 3 && param->u.pd.value == 2;
     if (!ok) passed = false;
-    if (std::strcmp(param->u.pd.u.namesptr, active ? "\xE4\xB8\xAD\xE6\x96\x87|Off|\xE5\x8F\x82\xE6\x95\xB0" : "\xD6\xD0\xCE\xC4|Off|\xB2\xCE\xCA\xFD")) passed = false;
+    if (std::strcmp(param->u.pd.u.PF_DEF_NAMESPTR, active ? "\xE4\xB8\xAD\xE6\x96\x87|Off|\xE5\x8F\x82\xE6\x95\xB0" : "\xD6\xD0\xCE\xC4|Off|\xB2\xCE\xCA\xFD")) passed = false;
     wchar_t wide[40]{};
-    auto n = MultiByteToWideChar(1252, 0, param->name, -1, wide, 40);
+    auto n = MultiByteToWideChar(1252, 0, param->PF_DEF_NAME, -1, wide, 40);
     if (active && legacy && (n != 3 || std::wstring(wide) != L"\x4E2D\x6587")) passed = false;
     // Popup managers may convert their Unicode item text back to ANSI before
     // displaying it. The old decoder-only bridge loses Chinese at this step.
@@ -56,19 +60,26 @@ PF_Err AlternativeAdd(PF_ProgPtr ref, PF_ParamIndex index, PF_ParamDef* param) {
 PF_Err Update(PF_ProgPtr, PF_ParamIndex, const PF_ParamDef* param) {
     ++updates;
     const auto name = active ? "\xE5\x8F\x82\xE6\x95\xB0" : "\xB2\xCE\xCA\xFD";
-    if (!param || std::strcmp(param->name, name) || param->u.fs_d.slider_min != 4 || param->u.fs_d.slider_max != 97)
+    if (!param || std::strcmp(param->PF_DEF_NAME, name) || param->u.fs_d.slider_min != 4 || param->u.fs_d.slider_max != 97)
         passed = false;
     return PF_Err_NONE;
 }
 PF_Err GetLanguage(A_char* output) { strcpy_s(output, PF_APP_LANG_TAG_SIZE, language); return PF_Err_NONE; }
 A_Err RegisterDeath(AEGP_PluginID, AEGP_DeathHook, AEGP_DeathRefcon) { return A_Err_NONE; }
+PF_Err SetOptions(PF_ProgPtr, const A_char* name) {
+    ++options_calls;
+    if (!name || std::strcmp(name, active ? "\xE5\x8F\x82\xE6\x95\xB0" : "\xB2\xCE\xCA\xFD")) passed = false;
+    return PF_Err_NONE;
+}
 PFAppSuite6 app{};
 PF_ParamUtilsSuite3 paramsuite{};
+PF_EffectUISuite1 effectsuite{};
 AEGP_RegisterSuite5 registration{};
 SPErr Acquire(const char* name, int32 version, const void** output) {
     if (!std::strcmp(name, kPFAppSuite) && version == kPFAppSuiteVersion6) *output = &app;
     else if (!std::strcmp(name, kPFParamUtilsSuite) && version == kPFParamUtilsSuiteVersion3) *output = &paramsuite;
     else if (!std::strcmp(name, kAEGPRegisterSuite) && version == kAEGPRegisterSuiteVersion5) *output = &registration;
+    else if (!std::strcmp(name, kPFEffectUISuite) && version == kPFEffectUISuiteVersion1) *output = &effectsuite;
     else { *output = nullptr; return kSPBadParameterError; }
     return kSPNoError;
 }
@@ -93,6 +104,7 @@ int wmain(int argc, wchar_t** argv) {
     legacy = active && (MOCK_MAJOR < 26 || (MOCK_MAJOR == 26 && MOCK_MINOR < 2));
     app.PF_AppGetLanguage = &GetLanguage;
     paramsuite.PF_UpdateParamUI = &Update;
+    effectsuite.PF_SetOptionsButtonName = &SetOptions;
     registration.AEGP_RegisterDeathHook = &RegisterDeath;
     SPBasicSuite basic{}; basic.AcquireSuite = &Acquire; basic.ReleaseSuite = &Release;
     // Load a PiPL-only effect before the bridge, exercising startup module enumeration.
@@ -156,20 +168,35 @@ int wmain(int argc, wchar_t** argv) {
     auto compact = reinterpret_cast<PF_ParamDef*>(memory + info.dwPageSize - offsetof(PF_ParamDef,u) - sizeof(PF_FloatSliderDef));
     std::memset(compact, 0, offsetof(PF_ParamDef,u) + sizeof(PF_FloatSliderDef));
     compact->param_type = PF_Param_FLOAT_SLIDER;
-    strcpy_s(compact->name, "\xB2\xCE\xCA\xFD");
+    strcpy_s(compact->PF_DEF_NAME, "\xB2\xCE\xCA\xFD");
     compact->u.fs_d.slider_min = 4; compact->u.fs_d.slider_max = 97;
     PF_ParamDef* list[]{nullptr, compact};
     CHECK(!modern(PF_Cmd_UPDATE_PARAMS_UI, &in, &out, list, nullptr, nullptr));
     CHECK(passed.load());
-    CHECK(!std::strcmp(compact->name, "\xB2\xCE\xCA\xFD")); // Host-owned params stay intact.
+    CHECK(!std::strcmp(compact->PF_DEF_NAME, "\xB2\xCE\xCA\xFD")); // Host-owned params stay intact.
     CHECK(updates == (active ? 2 : 1));
     VirtualFree(memory, 0, MEM_RELEASE);
+    CHECK(!modern(PF_Cmd_SEQUENCE_SETUP, &in, &out, nullptr, nullptr, nullptr));
+    CHECK(!std::strcmp(out.name, active ? utf8 : gbk) && out.num_params == 88);
+    CHECK(!modern(PF_Cmd_SEQUENCE_RESETUP, &in, &out, nullptr, nullptr, nullptr));
+    CHECK(!std::strcmp(out.name, active ? utf8 : gbk));
+    CHECK(!modern(PF_Cmd_ABOUT, &in, &out, nullptr, nullptr, nullptr));
+    CHECK(!std::strcmp(out.return_msg, active ? "\xE5\x8F\x82\xE6\x95\xB0" : "\xB2\xCE\xCA\xFD"));
+    CHECK(modern(PF_Cmd_DO_DIALOG, &in, &out, nullptr, nullptr, nullptr) == 321);
+    CHECK(options_calls == 1 && passed.load());
+    CHECK(!std::strcmp(out.return_msg, active ? "\xE5\x8F\x82\xE6\x95\xB0" : "\xB2\xCE\xCA\xFD"));
+    CHECK(out.out_flags & PF_OutFlag_DISPLAY_ERROR_MESSAGE);
+    out = {};
+    strcpy_s(out.name, gbk);
+    strcpy_s(out.return_msg, gbk);
+    CHECK(!modern(PF_Cmd_RENDER, &in, &out, nullptr, nullptr, nullptr));
+    CHECK(!std::strcmp(out.name, gbk) && !std::strcmp(out.return_msg, gbk) && out.out_flags == 0);
     // Unregistered text is forwarded with its requested code page.
     wchar_t wide[50]{};
     CHECK(MultiByteToWideChar(1252, 0, "English", -1, wide, 50) == 8 && std::wstring(wide) == L"English");
     CHECK(MultiByteToWideChar(1252, 0, "\xC3\xA9", -1, wide, 50) == 3);
-    std::printf("PASS: %d mock-host checks; AE=%d.%d; UI=%s; active=%d; legacy=%d; adds=%u; updates=%u.\n",
-        checks, MOCK_MAJOR, MOCK_MINOR, language, active, legacy, adds.load(), updates.load());
+    std::printf("PASS: %d mock-host checks; AE=%d.%d.%d; UI=%s; active=%d; legacy=%d; adds=%u; updates=%u.\n",
+        checks, MOCK_MAJOR, MOCK_MINOR, MOCK_PATCH, language, active, legacy, adds.load(), updates.load());
     // Hooks and module pins intentionally live to process exit.
     return 0;
 }

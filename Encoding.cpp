@@ -74,6 +74,52 @@ std::string Normalize(std::string_view s, SourceEncoding source, DecodeFn decode
     if (encode(CP_UTF8, WC_ERR_INVALID_CHARS, wide.data(), static_cast<int>(wide.size()), result.data(), n, nullptr, nullptr) != n) return {};
     return result;
 }
+static size_t PopupUnitLength(std::string_view s, size_t i) noexcept {
+    const auto c = static_cast<unsigned char>(s[i]);
+    if (c < 0x80) return 1;
+    size_t utf8 = c >= 0xC2 && c <= 0xDF ? 2 : c >= 0xE0 && c <= 0xEF ? 3 : c >= 0xF0 && c <= 0xF4 ? 4 : 0;
+    if (utf8 && s.size() - i >= utf8 && IsValidUTF8(s.substr(i, utf8))) return utf8;
+    if (c >= 0x81 && c <= 0xFE && i + 1 < s.size()) {
+        const auto trail = static_cast<unsigned char>(s[i+1]);
+        // GBK trail bytes include 0x7C. That byte is not a menu separator here.
+        if (trail >= 0x40 && trail <= 0xFE && trail != 0x7F) return 2;
+    }
+    return 1;
+}
+template<class F> static void ForEachPopupItem(std::string_view s, F item) {
+    size_t begin = 0, i = 0;
+    while (i < s.size()) {
+        if (s[i] == '|') { item(s.substr(begin, i-begin)); begin = ++i; }
+        else i += PopupUnitLength(s, i);
+    }
+    item(s.substr(begin)); // Keep empty first/last/adjacent items.
+}
+std::string NormalizePopup(std::string_view s, SourceEncoding source, DecodeFn decode, EncodeFn encode) {
+    if (s.empty() || s.size() > 65535 || s.find('\0') != s.npos) return {};
+    if (IsValidUTF8(s) || source == SourceEncoding::UTF8) return {};
+    bool strong_utf8 = false;
+    ForEachPopupItem(s, [&](std::string_view item) {
+        // Three/four-byte UTF-8 characters distinguish common translated UTF-8
+        // labels from GBK words whose two bytes also happen to be valid UTF-8.
+        if (IsValidUTF8(item)) for (unsigned char c : item)
+            if (c >= 0xE0 && c <= 0xF4) strong_utf8 = true;
+    });
+    if (!strong_utf8) {
+        auto whole = Normalize(s, source, decode, encode);
+        if (!whole.empty()) return whole; // Retain the existing all-GBK behavior.
+    }
+    std::string result;
+    result.reserve(s.size());
+    bool first = true, changed = false;
+    ForEachPopupItem(s, [&](std::string_view item) {
+        if (!first) result += '|';
+        first = false;
+        auto fixed = Normalize(item, source, decode, encode);
+        changed |= !fixed.empty();
+        result.append(fixed.empty() ? item : std::string_view(fixed));
+    });
+    return changed ? result : std::string{};
+}
 size_t UTF8Prefix(std::string_view s, size_t capacity) noexcept {
     size_t n = (std::min)(s.size(), capacity);
     if (n < s.size()) while (n && (static_cast<unsigned char>(s[n]) & 0xC0) == 0x80) --n;
@@ -98,31 +144,20 @@ const char* Intern(std::string_view s) {
     std::unique_lock lock(store.mutex);
     return store.strings.emplace(s).first->c_str();
 }
-void RegisterDisplayText(std::string_view s) {
+static void RegisterOneDisplayText(std::string_view s) {
     // Decode before taking the lock: conversion hooks also consult this store.
     if (!IsValidUTF8(s)) return;
     auto wide = Decode(s, CP_UTF8, &MultiByteToWideChar);
     if (!ContainsHan(wide)) return;
     auto& store = Strings();
-    {
-        std::unique_lock lock(store.mutex);
-        store.display.emplace(s);
-        store.wide_display.emplace(wide);
-    }
-    // Hosts commonly split popup item lists before converting each item.
-    size_t begin = 0;
-    for (size_t end = 0; end <= s.size(); ++end) {
-        if (end == s.size() || s[end] == '|') {
-            auto token = s.substr(begin, end - begin);
-            auto wide_token = Decode(token, CP_UTF8, &MultiByteToWideChar);
-            if (ContainsHan(wide_token)) {
-                std::unique_lock lock(store.mutex);
-                store.display.emplace(token);
-                store.wide_display.emplace(wide_token);
-            }
-            begin = end + 1;
-        }
-    }
+    std::unique_lock lock(store.mutex);
+    store.display.emplace(s);
+    store.wide_display.emplace(wide);
+}
+void RegisterDisplayText(std::string_view s) {
+    RegisterOneDisplayText(s);
+    // One undecodable item must not prevent other valid Chinese items registering.
+    ForEachPopupItem(s, [](std::string_view token) { RegisterOneDisplayText(token); });
 }
 bool IsRegisteredDisplayText(std::string_view s) {
     auto& store = Strings();

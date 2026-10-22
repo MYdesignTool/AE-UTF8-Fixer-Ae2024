@@ -1,0 +1,26 @@
+AE Locale Bridge 0.2.2 verification — 2026-10-22 Asia/Shanghai
+Release x64; MSVC 19.51.
+Supplied May2023 SDK: 9/9 suites passed.
+Repository AE_SDK: 9/9 suites passed.
+Cross-SDK mock host / repair AEX loads: both directions passed, 41 checks each.
+Mixed-menu and output-title regressions failed against 0.2.1 before repair.
+--- Supplied SDK ---
+PASS: 46 encoding checks, 8 concurrent registry/cache workers.
+PASS: 20480 checks across 4096 deterministic malformed-input/native-API cases.
+PASS: 135 popup checks, 14 menu entries, ANSI question-mark reproduction, 8 concurrent workers.
+PASS: 44 SDK parameter checks, including 14 guarded allocation layouts.
+PASS: 113 hook lifecycle checks, failure rollback, retry and duplicate-target handling.
+PASS: 41 mock-host checks; AE=24.6.2; UI=en_US; active=1; legacy=1; adds=804; updates=2.
+PASS: 41 mock-host checks; AE=26.2.0; UI=en_US; active=1; legacy=0; adds=804; updates=2.
+PASS: 41 mock-host checks; AE=23.6.0; UI=en_US; active=0; legacy=0; adds=804; updates=1.
+PASS: 41 mock-host checks; AE=24.6.2; UI=zh_CN; active=0; legacy=0; adds=804; updates=1.
+--- Repository SDK ---
+PASS: 46 encoding checks, 8 concurrent registry/cache workers.
+PASS: 20480 checks across 4096 deterministic malformed-input/native-API cases.
+PASS: 135 popup checks, 14 menu entries, ANSI question-mark reproduction, 8 concurrent workers.
+PASS: 44 SDK parameter checks, including 14 guarded allocation layouts.
+PASS: 113 hook lifecycle checks, failure rollback, retry and duplicate-target handling.
+PASS: 41 mock-host checks; AE=24.6.2; UI=en_US; active=1; legacy=1; adds=804; updates=2.
+PASS: 41 mock-host checks; AE=26.2.0; UI=en_US; active=1; legacy=0; adds=804; updates=2.
+PASS: 41 mock-host checks; AE=23.6.0; UI=en_US; active=0; legacy=0; adds=804; updates=1.
+PASS: 41 mock-host checks; AE=24.6.2; UI=zh_CN; active=0; legacy=0; adds=804; updates=1.

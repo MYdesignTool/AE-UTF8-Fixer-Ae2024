@@ -1,6 +1,6 @@
 // Derived from AdoreLowen's AE UTF-8 Fixer (MIT). See LICENSE and UPSTREAM.md.
 #include "AEConfig.h"
-#include "AE_Effect.h"
+#include "SDKCompat.h"
 #include "AE_Macros.h"
 #include "AE_EffectSuites.h"
 #include "AE_GeneralPlug.h"
@@ -17,13 +17,6 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-
-// SDKs before the newer UTF string aliases expose these as plain char fields.
-#ifndef PF_DEF_NAME
-#define PF_DEF_NAME name
-#define PF_DEF_NAMESPTR namesptr
-#define PF_DEF_NAMEPTR nameptr
-#endif
 
 namespace {
 HMODULE self_module{};
@@ -42,7 +35,9 @@ constexpr size_t effect_pool_size = 2048;
 using EffectFn = PF_Err(*)(PF_Cmd, PF_InData*, PF_OutData*, PF_ParamDef*[], PF_LayerDef*, void*);
 using AddFn = decltype(PF_InData::inter.add_param);
 using UpdateFn = decltype(PF_ParamUtilsSuite3::PF_UpdateParamUI);
+using OptionsFn = decltype(PF_EffectUISuite1::PF_SetOptionsButtonName);
 std::atomic<UpdateFn> original_update{};
+std::atomic<OptionsFn> original_options{};
 std::mutex hook_mutex;
 struct Slot { std::atomic<void*> original{}; HMODULE module{}; };
 std::array<Slot, effect_pool_size> effects;
@@ -117,7 +112,7 @@ void ReadSettings(bridge::HostVersion host) {
     else if (mode != L"auto") { enabled = false; Log("Invalid LegacyBridge; disabled."); }
     legacy_bridge = bridge::UseLegacyBridge(host, policy);
     char msg[200]{};
-    sprintf_s(msg, "AE Locale Bridge 0.2.1; host=%u.%u.%u; ACP=%u; OEMCP=%u; legacy=%u",
+    sprintf_s(msg, "AE Locale Bridge 0.2.2; host=%u.%u.%u; ACP=%u; OEMCP=%u; legacy=%u",
               host.major, host.minor, host.patch, GetACP(), GetOEMCP(), legacy_bridge);
     Log(msg);
 }
@@ -126,11 +121,13 @@ std::string NormalizeText(std::string_view input) {
     if (!output.empty()) ++normalized_count;
     return output;
 }
-const char* FixPointer(const char* input) {
+const char* FixPointer(const char* input, bool popup = false) {
     if (!input) return input;
     const auto n = strnlen_s(input, 65536);
     if (!n || n >= 65536) return input;
-    auto output = NormalizeText({input, n});
+    auto output = popup ? bridge::NormalizePopup({input, n}, source_encoding, original_decode, original_encode)
+                        : NormalizeText({input, n});
+    if (popup && !output.empty()) ++normalized_count;
     auto value = output.empty() ? std::string_view(input, n) : std::string_view(output);
     if (legacy_bridge) bridge::RegisterDisplayText(value);
     return output.empty() ? input : bridge::Intern(value);
@@ -146,6 +143,22 @@ template<size_t N> bool FixArray(char (&value)[N]) {
     }
     if (legacy_bridge) bridge::RegisterDisplayText(value);
     return !output.empty();
+}
+PF_Err CompleteEffect(PF_Err result, PF_Cmd cmd, PF_OutData* out) noexcept {
+    if (!out) return result;
+    try {
+        if (cmd == PF_Cmd_SEQUENCE_SETUP || cmd == PF_Cmd_SEQUENCE_RESETUP) FixArray(out->name);
+        if (cmd == PF_Cmd_ABOUT || (out->out_flags & PF_OutFlag_DISPLAY_ERROR_MESSAGE)) FixArray(out->return_msg);
+    } catch (...) { Log("Effect output text normalization failed."); }
+    return result;
+}
+PF_Err FixedOptions(PF_ProgPtr ref, const A_char* name) {
+    auto original = original_options.load(std::memory_order_acquire);
+    if (!original) return PF_Err_INTERNAL_STRUCT_DAMAGED;
+    auto fixed = name;
+    try { fixed = FixPointer(name); }
+    catch (...) { Log("Options button text normalization failed."); }
+    return original(ref, fixed);
 }
 void InspectPopupSource(const char* text) {
     if (!text) return;
@@ -170,7 +183,7 @@ bool FixParam(PF_ParamDef* def) {
     switch (def->param_type) {
         case PF_Param_POPUP:
             InspectPopupSource(def->u.pd.u.PF_DEF_NAMESPTR);
-            def->u.pd.u.PF_DEF_NAMESPTR = FixPointer(def->u.pd.u.PF_DEF_NAMESPTR);
+            def->u.pd.u.PF_DEF_NAMESPTR = FixPointer(def->u.pd.u.PF_DEF_NAMESPTR, true);
             break;
         case PF_Param_CHECKBOX: def->u.bd.u.PF_DEF_NAMEPTR = FixPointer(def->u.bd.u.PF_DEF_NAMEPTR); break;
         case PF_Param_BUTTON: def->u.button_d.u.PF_DEF_NAMESPTR = FixPointer(def->u.button_d.u.PF_DEF_NAMESPTR); break;
@@ -237,7 +250,7 @@ template<size_t I> PF_Err EffectEntry(PF_Cmd cmd, PF_InData* input, PF_OutData* 
     if (cmd == PF_Cmd_PARAMS_SETUP && input && input->inter.add_param) {
         try { HookHostAdd(input->inter.add_param); }
         catch (...) { Log("Host add_param hook failed."); }
-        return original(cmd, input, out, params, output, extra);
+        return CompleteEffect(original(cmd, input, out, params, output, extra), cmd, out);
     }
     // Do not mutate host-owned params during render or scan variably-sized unions.
     if ((cmd == PF_Cmd_UPDATE_PARAMS_UI || cmd == PF_Cmd_USER_CHANGED_PARAM) && input && out && params) {
@@ -254,21 +267,33 @@ template<size_t I> PF_Err EffectEntry(PF_Cmd cmd, PF_InData* input, PF_OutData* 
                 } catch (...) { Log("Post-UI name normalization failed."); }
             }
         }
-        return result;
+        return CompleteEffect(result, cmd, out);
     }
-    return original(cmd, input, out, params, output, extra);
+    return CompleteEffect(original(cmd, input, out, params, output, extra), cmd, out);
 }
-template<typename F> bool Install(void* target, void* detour, F publish) {
+struct HookBackend {
+    decltype(&MH_CreateHook) create = &MH_CreateHook;
+    decltype(&MH_EnableHook) enable = &MH_EnableHook;
+    decltype(&MH_RemoveHook) remove = &MH_RemoveHook;
+};
+template<typename F> bool Install(void* target, void* detour, F publish, const HookBackend& backend = {}) {
     if (!target) return false;
     // caller holds hook_mutex; publish trampoline BEFORE another thread sees detour.
     if (hooks.contains(target)) return true;
     void* trampoline{};
-    if (MH_CreateHook(target, detour, &trampoline) != MH_OK) { ++failed_hooks; return false; }
+    if (backend.create(target, detour, &trampoline) != MH_OK) { ++failed_hooks; return false; }
+    try { hooks.emplace(target, Hook{detour, trampoline}); }
+    catch (...) { backend.remove(target); throw; }
     publish(trampoline);
-    if (MH_EnableHook(target) != MH_OK) {
-        MH_RemoveHook(target); ++failed_hooks; return false;
+    if (backend.enable(target) != MH_OK) {
+        // RemoveHook frees the trampoline. Restore a valid forwarding address
+        // before freeing it; other successfully installed hooks can still use it.
+        publish(target);
+        hooks.erase(target);
+        backend.remove(target);
+        ++failed_hooks;
+        return false;
     }
-    hooks.emplace(target, Hook{detour, trampoline});
     return true;
 }
 template<size_t... I> constexpr auto AddPool(std::index_sequence<I...>) {
@@ -279,10 +304,10 @@ void HookHostAdd(AddFn target) {
     std::lock_guard lock(hook_mutex);
     if (hooks.contains(reinterpret_cast<void*>(target))) return;
     if (add_count == add_callbacks.size()) { Log("Host add_param wrapper pool exhausted."); return; }
-    auto id = add_count++;
-    if (!Install(reinterpret_cast<void*>(target), reinterpret_cast<void*>(add_pool[id]),
-        [id](void* p) { add_callbacks[id].original.store(p, std::memory_order_release); }))
-        Log("Host add_param hook failed.");
+    auto id = add_count;
+    if (Install(reinterpret_cast<void*>(target), reinterpret_cast<void*>(add_pool[id]),
+        [id](void* p) { add_callbacks[id].original.store(p, std::memory_order_release); })) ++add_count;
+    else Log("Host add_param hook failed.");
 }
 template<size_t... I> constexpr auto EffectPool(std::index_sequence<I...>) {
     return std::array<EffectFn, sizeof...(I)>{&EffectEntry<I>...};
@@ -294,10 +319,10 @@ void HookEffect(HMODULE module, const char* name) {
     std::lock_guard lock(hook_mutex);
     if (hooks.contains(target)) return;
     if (effect_count == effect_pool_size) { Log("Effect wrapper pool exhausted."); return; }
-    const auto id = effect_count++;
+    const auto id = effect_count;
     effects[id].module = module;
-    if (!Install(target, reinterpret_cast<void*>(effect_pool[id]), [id](void* p) { effects[id].original.store(p, std::memory_order_release); }))
-        Log("Effect entry hook failed.");
+    if (Install(target, reinterpret_cast<void*>(effect_pool[id]), [id](void* p) { effects[id].original.store(p, std::memory_order_release); })) ++effect_count;
+    else Log("Effect entry hook failed.");
 }
 struct RegistrationContext {
     HMODULE module;
@@ -362,11 +387,11 @@ template<bool V2> void HookRegistration(HMODULE module) {
     auto& count = V2 ? reg2_count : reg1_count;
     auto& slots = V2 ? registration2 : registration1;
     if (count == pool_size) { Log("Registration wrapper pool exhausted."); return; }
-    auto id = count++;
+    auto id = count;
     slots[id].module = module;
     void* wrapper{};
     if constexpr (V2) wrapper = reinterpret_cast<void*>(reg2_pool[id]); else wrapper = reinterpret_cast<void*>(reg1_pool[id]);
-    Install(target, wrapper, [&](void* p) { slots[id].original.store(p, std::memory_order_release); });
+    if (Install(target, wrapper, [&](void* p) { slots[id].original.store(p, std::memory_order_release); })) ++count;
 }
 // Win32 PiPL is a 16-bit resource version followed by little-endian PIPropertyList.
 // Parse bounds before reading; no PE export scanning or AEGP/effect ABI guesses.
@@ -487,6 +512,12 @@ void InstallHostHooks(SPBasicSuite* basic) {
             [](void* p) { original_update.store(reinterpret_cast<UpdateFn>(p), std::memory_order_release); });
         basic->ReleaseSuite(kPFParamUtilsSuite, kPFParamUtilsSuiteVersion3);
     } else Log("PF Param Utils Suite3 unavailable; dynamic UI update hook skipped.");
+    const PF_EffectUISuite1* ui{};
+    if (basic && !basic->AcquireSuite(kPFEffectUISuite, kPFEffectUISuiteVersion1, reinterpret_cast<const void**>(&ui)) && ui) {
+        Install(reinterpret_cast<void*>(ui->PF_SetOptionsButtonName), reinterpret_cast<void*>(&FixedOptions),
+            [](void* p) { original_options.store(reinterpret_cast<OptionsFn>(p), std::memory_order_release); });
+        basic->ReleaseSuite(kPFEffectUISuite, kPFEffectUISuiteVersion1);
+    } else Log("PF Effect UI Suite1 unavailable; Options label hook skipped.");
     Install(reinterpret_cast<void*>(&LoadLibraryW), reinterpret_cast<void*>(&FixedLoad),
         [](void* p) { original_load = reinterpret_cast<decltype(original_load)>(p); });
     Install(reinterpret_cast<void*>(&LoadLibraryExW), reinterpret_cast<void*>(&FixedLoadEx),

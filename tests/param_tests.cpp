@@ -42,6 +42,34 @@ int main() {
     CHECK(!FixArray(latin) && !std::strcmp(latin, "\xC3\xA9"));
     CHECK(!bridge::IsRegisteredDisplayText("Off"));
     CHECK(FixPointer(nullptr) == nullptr);
+    const std::string mixed_menu = std::string("中文|") + gbk + "|Off||(-|";
+    def = {};
+    def.param_type = PF_Param_POPUP;
+    def.u.pd.u.PF_DEF_NAMESPTR = mixed_menu.c_str();
+    def.u.pd.num_choices = 6; def.u.pd.value = 2; def.uu.id = 123;
+    FixParam(&def);
+    CHECK(!std::strcmp(def.u.pd.u.PF_DEF_NAMESPTR, "中文|中文|Off||(-|"));
+    CHECK(def.u.pd.num_choices == 6 && def.u.pd.value == 2 && def.uu.id == 123);
+    const auto trail_char = bridge::Normalize("\x81\x7C", bridge::SourceEncoding::Auto, &MultiByteToWideChar);
+    CHECK(!trail_char.empty());
+    const std::string trail_menu = std::string("\x81\x7C|") + gbk;
+    def.u.pd.u.PF_DEF_NAMESPTR = trail_menu.c_str();
+    FixParam(&def);
+    CHECK(std::string(def.u.pd.u.PF_DEF_NAMESPTR) == trail_char + "|" + utf8);
+    const std::string emoji_menu = std::string("😀中文|é|") + gbk;
+    def.u.pd.u.PF_DEF_NAMESPTR = emoji_menu.c_str();
+    FixParam(&def);
+    CHECK(!std::strcmp(def.u.pd.u.PF_DEF_NAMESPTR, "😀中文|é|中文"));
+    CHECK(bridge::NormalizePopup("|Off||(-|", bridge::SourceEncoding::Auto, &MultiByteToWideChar).empty());
+    CHECK(bridge::NormalizePopup(mixed_menu, bridge::SourceEncoding::UTF8, &MultiByteToWideChar).empty());
+    const std::string partial_bad = std::string("独立有效项|") + "\xFF";
+    bridge::RegisterDisplayText(partial_bad);
+    CHECK(bridge::IsRegisteredDisplayText("独立有效项"));
+    CHECK(!bridge::IsRegisteredDisplayText(std::string("\xFF",1)));
+    const std::string all_gbk_menu = std::string(gbk) + "|\xC9\xAB";
+    def.u.pd.u.PF_DEF_NAMESPTR = all_gbk_menu.c_str();
+    FixParam(&def);
+    CHECK(!std::strcmp(def.u.pd.u.PF_DEF_NAMESPTR, "中文|色"));
     // Copy each SDK type from memory ending exactly at a PAGE_NOACCESS boundary.
     struct ParamSize { PF_ParamType type; size_t size; };
     const ParamSize sizes[]{

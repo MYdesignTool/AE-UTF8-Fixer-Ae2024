@@ -16,6 +16,9 @@ bool ContainsHan(std::wstring_view text) noexcept;
 // Empty means unchanged/unrecognized. Never replaces invalid bytes with '?'.
 std::string Normalize(std::string_view text, SourceEncoding source, DecodeFn decode,
                       EncodeFn encode = &WideCharToMultiByte);
+// Each popup item can come from a different translation table/encoding.
+std::string NormalizePopup(std::string_view text, SourceEncoding source, DecodeFn decode,
+                           EncodeFn encode = &WideCharToMultiByte);
 size_t UTF8Prefix(std::string_view text, size_t capacity) noexcept;
 // Stable process-lifetime storage; AE can retain popup and checkbox pointers.
 const char* Intern(std::string_view text);
