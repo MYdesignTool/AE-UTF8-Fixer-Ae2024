@@ -1,0 +1,9 @@
+* text=auto
+*.cpp text eol=lf
+*.h text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.r text eol=lf
+*.yml text eol=lf
+# Keep the pinned vendor source's original formatting.
+third_party/minhook/** -whitespace

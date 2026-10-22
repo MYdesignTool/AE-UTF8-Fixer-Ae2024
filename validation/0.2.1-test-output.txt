@@ -1,0 +1,11 @@
+AE Locale Bridge 0.2.1 local verification — 2026-10-22 Asia/Shanghai
+Release x64; MSVC 19.51; user-provided May2023 Adobe SDK.
+ctest --test-dir build -C Release --output-on-failure --timeout 45
+7/7 tests passed. The decoder-only 0.2.0 mock-host regression failed before the fix.
+PASS: 46 encoding checks, 8 concurrent registry/cache workers.
+PASS: 135 popup checks, 14 menu entries, ANSI question-mark reproduction, 8 concurrent workers.
+PASS: 34 SDK parameter checks, including 14 guarded allocation layouts.
+PASS: 29 mock-host checks; AE=24.6; UI=en_US; active=1; legacy=1; adds=804; updates=2.
+PASS: 29 mock-host checks; AE=26.2; UI=en_US; active=1; legacy=0; adds=804; updates=2.
+PASS: 29 mock-host checks; AE=23.6; UI=en_US; active=0; legacy=0; adds=804; updates=1.
+PASS: 29 mock-host checks; AE=24.6; UI=zh_CN; active=0; legacy=0; adds=804; updates=1.

@@ -1,624 +1,537 @@
-﻿#include "AEConfig.h"
+// Derived from AdoreLowen's AE UTF-8 Fixer (MIT). See LICENSE and UPSTREAM.md.
+#include "AEConfig.h"
 #include "AE_Effect.h"
-#include "AE_EffectCB.h"
 #include "AE_Macros.h"
-#include "Param_Utils.h"
-#include "AE_EffectVers.h"
 #include "AE_EffectSuites.h"
 #include "AE_GeneralPlug.h"
+#include "AE_PluginData.h"
+#include "Encoding.h"
 #include "MinHook.h"
-
-#include <windows.h>
 #include <tlhelp32.h>
-#ifndef EXCEPTION_EXECUTE_FHANDLER
-#define EXCEPTION_EXECUTE_FHANDLER 1
-#endif
-#include <string>
-#include <string_view>
-#include <cstring>
-#include <unordered_set>
-#include <mutex>
-#include <shared_mutex>
+#include <array>
 #include <atomic>
-#include <memory>
-#include <span>
-
-// 跟踪已 hook 的插件数量
-#define WRAPPER_POOL_SIZE 2048
-std::atomic<void*> g_OriginalEntryPoints[WRAPPER_POOL_SIZE] = {};
-std::atomic<int> g_WrapperCount{ 0 };
-std::mutex g_WrapperMutex;
-
-// ==========================================
-// 1. UTF-8 验证与处理
-// ==========================================
-
-inline bool IsValidUTF8(std::string_view sv) noexcept {
-    const auto* bytes = reinterpret_cast<const unsigned char*>(sv.data());
-    const auto* end = bytes + sv.size();
-
-    bool has_high_byte = false;      
-    bool has_3byte_character = false; 
-
-    while (bytes < end) {
-        if (bytes[0] <= 0x7F) {
-            bytes += 1;
-        }
-        else if ((bytes[0] & 0xE0) == 0xC0) {
-            if (bytes + 1 >= end || (bytes[1] & 0xC0) != 0x80) return false;
-            has_high_byte = true;
-            bytes += 2;
-        }
-        else if ((bytes[0] & 0xF0) == 0xE0) {
-            if (bytes + 2 >= end || (bytes[1] & 0xC0) != 0x80 || (bytes[2] & 0xC0) != 0x80) return false;
-            has_high_byte = true;
-            has_3byte_character = true;
-            bytes += 3;
-        }
-        else if ((bytes[0] & 0xF8) == 0xF0) {
-            if (bytes + 3 >= end || (bytes[1] & 0xC0) != 0x80 || (bytes[2] & 0xC0) != 0x80 || (bytes[3] & 0xC0) != 0x80) return false;
-            has_high_byte = true;
-            bytes += 4;
-        }
-        else {
-            return false;
-        }
-    }
-
-    if (has_high_byte && !has_3byte_character) {
-        return false; 
-    }
-
-    return true;
-}
-
-void TrimInvalidTailUTF8(std::span<char> s) noexcept {
-    if (s.empty()) return;
-    size_t i = s.size();
-    while (i > 0) {
-        auto c = static_cast<unsigned char>(s[i - 1]);
-        if ((c & 0x80) == 0x00) {
-            break;
-        }
-        else if ((c & 0xC0) == 0xC0) {
-            size_t need_bytes = 0;
-            if ((c & 0xE0) == 0xC0) need_bytes = 2;
-            else if ((c & 0xF0) == 0xE0) need_bytes = 3;
-            else if ((c & 0xF8) == 0xF0) need_bytes = 4;
-
-            if (s.size() - (i - 1) < need_bytes) {
-                s[i - 1] = '\0';
-            }
-            break;
-        }
-        else if ((c & 0xC0) == 0x80) {
-            i--;
-        }
-        else {
-            s[i - 1] = '\0';
-            i--;
-        }
-    }
-}
-
-// ==========================================
-// 2. GBKToUTF8 转换器
-// ==========================================
-
-template<size_t InlineSize = 256>
-class GBKToUTF8Converter {
-public:
-    explicit GBKToUTF8Converter(const char* gbk_str) noexcept {
-        if (!gbk_str || gbk_str[0] == '\0') return;
-
-        constexpr UINT codePage = 936; 
-        int wlen = MultiByteToWideChar(codePage, 0, gbk_str, -1, nullptr, 0);
-        if (wlen <= 1) return;
-
-        wchar_t* wbuf = m_inlineWBuf;
-        std::unique_ptr<wchar_t[]> heapWBuf;
-        if (static_cast<size_t>(wlen) > InlineSize) {
-            heapWBuf = std::make_unique<wchar_t[]>(wlen);
-            wbuf = heapWBuf.get();
-        }
-
-        MultiByteToWideChar(codePage, 0, gbk_str, -1, wbuf, wlen);
-
-        int u8len = WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, nullptr, 0, nullptr, nullptr);
-        if (u8len <= 1) return;
-
-        if (static_cast<size_t>(u8len) > InlineSize * 2) {
-            m_heapU8Buf.resize(u8len);
-            WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, m_heapU8Buf.data(), u8len, nullptr, nullptr);
-            m_heapU8Buf.resize(u8len - 1); 
-            m_view = m_heapU8Buf;
-        } else {
-            WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, m_inlineU8Buf, u8len, nullptr, nullptr);
-            m_view = std::string_view(m_inlineU8Buf, u8len - 1);
-        }
-    }
-
-    [[nodiscard]] std::string_view view() const noexcept { return m_view; }
-    [[nodiscard]] bool empty() const noexcept { return m_view.empty(); }
-    
-    std::string move_to_string() && noexcept {
-        if (!m_heapU8Buf.empty()) {
-            return std::move(m_heapU8Buf);
-        }
-        return std::string(m_view);
-    }
-
-private:
-    wchar_t m_inlineWBuf[InlineSize]{};
-    char m_inlineU8Buf[InlineSize * 2]{};
-    std::string m_heapU8Buf;
-    std::string_view m_view;
-};
-
-// ==========================================
-// 3. 全局字符串缓存
-// ==========================================
-
-static constexpr size_t kCacheShards = 4;
-
-struct StringHash {
-    using is_transparent = void; 
-    size_t operator()(std::string_view sv) const noexcept {
-        return std::hash<std::string_view>{}(sv);
-    }
-};
-
-struct StringEqual {
-    using is_transparent = void; 
-    bool operator()(std::string_view lhs, std::string_view rhs) const noexcept {
-        return lhs == rhs;
-    }
-};
-
-struct CacheContainer {
-    mutable std::shared_mutex mutex;
-    std::unordered_set<std::string, StringHash, StringEqual> cache;
-};
-
-inline CacheContainer& GetShardedCache(std::string_view sv) noexcept {
-    static CacheContainer shards[kCacheShards];
-    size_t hash = std::hash<std::string_view>{}(sv);
-    return shards[hash % kCacheShards];
-}
-
-const char* GetCachedUTF8String(GBKToUTF8Converter<>& converter) {
-    std::string_view sv = converter.view();
-    auto& cache_container = GetShardedCache(sv);
-    auto& cache = cache_container.cache;
-    auto& mutex = cache_container.mutex;
-    
-    {
-        std::shared_lock read_lock(mutex); 
-        if (auto it = cache.find(sv); it != cache.end()) {
-            return it->c_str(); 
-        }
-    }
-
-    std::unique_lock write_lock(mutex);
-    if (auto it = cache.find(sv); it != cache.end()) {
-        return it->c_str();
-    }
-    
-    auto [it, inserted] = cache.insert(std::move(converter).move_to_string());
-    return it->c_str();
-}
-
-// ==========================================
-// 4. 参数修复与 Hook 逻辑
-// ==========================================
-
-inline bool IsBufferWritable(const void* p, size_t len) noexcept {
-    if (!p || len == 0) return false;
-
-    auto* base = static_cast<const unsigned char*>(p);
-    auto* end = base + len;
-
-    MEMORY_BASIC_INFORMATION mbi{};
-    auto* cursor = base;
-    while (cursor < end) {
-        SIZE_T queried = VirtualQuery(cursor, &mbi, sizeof(mbi));
-        if (queried == 0) return false;
-
-        constexpr DWORD writable_mask = PAGE_READWRITE | PAGE_WRITECOPY
-                                      | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
-        if ((mbi.Protect & writable_mask) == 0) return false;
-
-        auto* regionEnd = static_cast<const unsigned char*>(mbi.BaseAddress) + mbi.RegionSize;
-        if (regionEnd <= cursor) return false;
-
-        cursor = regionEnd;
-    }
-    return true;
-}
-
-void FixStringPointer(const char*& ptr) noexcept {
-    if (ptr && ptr[0] != '\0' && !IsValidUTF8(ptr)) [[unlikely]] {
-        GBKToUTF8Converter<> converter(ptr);
-        if (!converter.empty()) {
-            ptr = GetCachedUTF8String(converter);
-        }
-    }
-}
-
-template <size_t N>
-void FixStringArray(char(&arr)[N]) noexcept {
-    if (arr[0] != '\0' && !IsValidUTF8(arr)) [[unlikely]] {
-        if (!IsBufferWritable(arr, N)) {
-            return;
-        }
-        GBKToUTF8Converter<> converter(arr);
-        std::string_view u8name = converter.view();
-        if (u8name.empty()) {
-            return;
-        }
-
-        const size_t copyLen = (u8name.size() < N - 1) ? u8name.size() : (N - 1);
-        memcpy_s(arr, N, u8name.data(), copyLen);
-        arr[copyLen] = '\0';
-
-        TrimInvalidTailUTF8(std::span<char>(arr, copyLen));
-    }
-}
-
-void ProcessAndFixParam(PF_ParamDef* def) noexcept {
-    if (!def) return;
-
-    FixStringArray(def->PF_DEF_NAME);
-
-    switch (def->param_type) {
-    case PF_Param_POPUP:
-        FixStringPointer(def->u.pd.u.PF_DEF_NAMESPTR);
-        break;
-
-    case PF_Param_CHECKBOX:
-        FixStringPointer(def->u.bd.u.PF_DEF_NAMEPTR);
-        break;
-
-    case PF_Param_BUTTON:
-        FixStringPointer(def->u.button_d.u.PF_DEF_NAMESPTR);
-        break;
-
-    case PF_Param_SLIDER:
-        FixStringArray(def->u.sd.value_desc);
-        break;
-
-    case PF_Param_FIX_SLIDER:
-        FixStringArray(def->u.fd.value_str);
-        FixStringArray(def->u.fd.value_desc);
-        break;
-
-    case PF_Param_FLOAT_SLIDER:
-        FixStringArray(def->u.fs_d.value_desc);
-        break;
-
-    default:
-
-        break;
-    }
-}
-
-// ==========================================
-// 5. 后处理扫描，确保插件修改后参数名称仍然有效
-// ==========================================
-
-static int FixAllParamNamesAndCheck(PF_InData* in_data, PF_ParamDef* params[]) noexcept {
-    if (!in_data || !params || in_data->num_params <= 0) return 0;
-
-    PF_ParamIndex scan_limit = in_data->num_params;
-    if (scan_limit > 10000) scan_limit = 10000;
-
-    int fixed_count = 0;
-    for (PF_ParamIndex i = 1; i < scan_limit; i++) {
-        if (params[i] && !IsValidUTF8(params[i]->PF_DEF_NAME)) {
-            ProcessAndFixParam(params[i]);
-            fixed_count++;
-        }
-    }
-    return fixed_count;
-}
-
-inline bool TryCreateAndEnableHook(void* pTarget, LPVOID pDetour, LPVOID* ppOriginal) noexcept {
-    if (MH_CreateHook(pTarget, pDetour, ppOriginal) != MH_OK) {
-        return false;
-    }
-    if (MH_EnableHook(pTarget) != MH_OK) {
-        MH_DisableHook(pTarget);
-        MH_RemoveHook(pTarget);
-        return false;
-    }
-    return true;
-}
-
-static std::unordered_set<void*> g_HookedAddParamAddrs;
-static PF_Err(*g_OriginalHostAddParam)(PF_ProgPtr, PF_ParamIndex, PF_ParamDef*) = nullptr;
-static std::mutex g_AddParamHookMutex;
-
-PF_Err Hooked_HostAddParam(PF_ProgPtr effect_ref, PF_ParamIndex index, PF_ParamDef* def) {
-    if (def) ProcessAndFixParam(def);
-    return g_OriginalHostAddParam(effect_ref, index, def);
-}
-
-void EnsureHostAddParamHooked(void* pTarget) noexcept {
-    if (!pTarget) return;
-
-    std::lock_guard<std::mutex> lock(g_AddParamHookMutex);
-
-    if (g_HookedAddParamAddrs.count(pTarget) > 0) {
-        return;
-    }
-
-    if (TryCreateAndEnableHook(pTarget,
-                               reinterpret_cast<LPVOID>(&Hooked_HostAddParam),
-                               reinterpret_cast<LPVOID*>(&g_OriginalHostAddParam))) {
-        g_HookedAddParamAddrs.insert(pTarget);
-    }
-}
-
-static PF_Err(*g_Original_PF_UpdateParamUI)(PF_ProgPtr, PF_ParamIndex, const PF_ParamDef*) = nullptr;
-
-PF_Err Hooked_PF_UpdateParamUI(PF_ProgPtr effect_ref, PF_ParamIndex param_index, const PF_ParamDef* defP) {
-    if (!defP) return g_Original_PF_UpdateParamUI(effect_ref, param_index, defP);
-    
-    PF_ParamDef fixed_def = *defP;
-    ProcessAndFixParam(&fixed_def);
-    return g_Original_PF_UpdateParamUI(effect_ref, param_index, &fixed_def);
-}
-
-static bool TryInstallPFUpdateParamUIHook(SPBasicSuite* basic) {
-    if (!basic) return false;
-    
-    __try {
-        PF_ParamUtilsSuite3* paramSuite = nullptr;
-        A_Err err = basic->AcquireSuite(kPFParamUtilsSuite, kPFParamUtilsSuiteVersion3, (const void**)&paramSuite);
-        if (err != A_Err_NONE || !paramSuite) {
-            return false;
-        }
-        
-        if (!paramSuite->PF_UpdateParamUI) {
-            basic->ReleaseSuite(kPFParamUtilsSuite, kPFParamUtilsSuiteVersion3);
-            return false;
-        }
-        
-        void* target = reinterpret_cast<void*>(paramSuite->PF_UpdateParamUI);
-        TryCreateAndEnableHook(target,
-                               reinterpret_cast<LPVOID>(&Hooked_PF_UpdateParamUI),
-                               reinterpret_cast<LPVOID*>(&g_Original_PF_UpdateParamUI));
-        
-        basic->ReleaseSuite(kPFParamUtilsSuite, kPFParamUtilsSuiteVersion3);
-        return true;
-    }
-    __except(EXCEPTION_EXECUTE_FHANDLER) {
-        return false;
-    }
-}
-
-template<int ID>
-PF_Err Trigger_EffectEntryPoint(
-    ULONG_PTR arg0,
-    ULONG_PTR arg1,
-    ULONG_PTR arg2,
-    ULONG_PTR arg3,
-    ULONG_PTR arg4,
-    ULONG_PTR arg5)
-{
-    void* original = g_OriginalEntryPoints[ID].load(std::memory_order_acquire);
-    if (!original) [[unlikely]] return PF_Err_NONE;
-
-    if (arg0 > 0xFFFF) {
-        typedef PF_Err(*AEGP_EntryPoint_t)(struct SPBasicSuite*, A_long, A_long, AEGP_PluginID, AEGP_GlobalRefcon*);
-        auto aegp_original = reinterpret_cast<AEGP_EntryPoint_t>(original);
-        return aegp_original(
-            reinterpret_cast<struct SPBasicSuite*>(arg0),
-            static_cast<A_long>(arg1),
-            static_cast<A_long>(arg2),
-            static_cast<AEGP_PluginID>(arg3),
-            reinterpret_cast<AEGP_GlobalRefcon*>(arg4)
-        );
-    }
-
-    PF_Cmd cmd = static_cast<PF_Cmd>(arg0);
-    auto* in_data = reinterpret_cast<PF_InData*>(arg1);
-    auto* out_data = reinterpret_cast<PF_OutData*>(arg2);
-    auto** params = reinterpret_cast<PF_ParamDef**>(arg3);
-    auto* output = reinterpret_cast<PF_LayerDef*>(arg4);
-    void* extra = reinterpret_cast<void*>(arg5);
-
-    typedef PF_Err(*EffectEntryPoint_t)(PF_Cmd, PF_InData*, PF_OutData*, PF_ParamDef* [], PF_LayerDef*, void*);
-    auto effect_original = reinterpret_cast<EffectEntryPoint_t>(original);
-
-    if (cmd == PF_Cmd_PARAMS_SETUP && in_data) {
-        if (in_data->inter.add_param) {
-            EnsureHostAddParamHooked(reinterpret_cast<void*>(in_data->inter.add_param));
-        }
-        if (in_data->pica_basicP && !g_Original_PF_UpdateParamUI) {
-            TryInstallPFUpdateParamUIHook(in_data->pica_basicP);
-        }
-    }
-
-    PF_Err result = effect_original(cmd, in_data, out_data, params, output, extra);
-
-    if (cmd == PF_Cmd_UPDATE_PARAMS_UI || cmd == PF_Cmd_USER_CHANGED_PARAM) {
-        int fixed_count = FixAllParamNamesAndCheck(in_data, params);
-        if (fixed_count > 0 && out_data) {
-            out_data->out_flags |= PF_OutFlag_REFRESH_UI;
-        }
-    }
-
-    return result;
-}
-
-#define P_ENTRY(n) &Trigger_EffectEntryPoint<n>
-typedef PF_Err(*EntryPointFunc_t)(ULONG_PTR, ULONG_PTR, ULONG_PTR, ULONG_PTR, ULONG_PTR, ULONG_PTR);
-
-#define P_ENTRY_8(n)   P_ENTRY(n), P_ENTRY(n+1), P_ENTRY(n+2), P_ENTRY(n+3), P_ENTRY(n+4), P_ENTRY(n+5), P_ENTRY(n+6), P_ENTRY(n+7)
-#define P_ENTRY_32(n)  P_ENTRY_8(n), P_ENTRY_8(n+8), P_ENTRY_8(n+16), P_ENTRY_8(n+24)
-#define P_ENTRY_128(n) P_ENTRY_32(n), P_ENTRY_32(n+32), P_ENTRY_32(n+64), P_ENTRY_32(n+96)
-#define P_ENTRY_512(n) P_ENTRY_128(n), P_ENTRY_128(n+128), P_ENTRY_128(n+256), P_ENTRY_128(n+384)
-#define P_ENTRY_2048(n) P_ENTRY_512(n), P_ENTRY_512(n+512), P_ENTRY_512(n+1024), P_ENTRY_512(n+1536)
-
-EntryPointFunc_t g_WrapperPool[WRAPPER_POOL_SIZE] = {
-    P_ENTRY_2048(0)
-};
-
-bool SafeGetExportDirectory(HMODULE hMod, IMAGE_EXPORT_DIRECTORY** out_exports) noexcept {
-    if (!hMod || !out_exports) return false;
-
-    __try {
-        auto* base = reinterpret_cast<unsigned char*>(hMod);
-        auto* dosHeader = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
-        if (dosHeader->e_magic != IMAGE_DOS_SIGNATURE) return false;
-        if (dosHeader->e_lfanew < sizeof(IMAGE_DOS_HEADER) || dosHeader->e_lfanew > 0x10000) return false;
-        auto* ntHeaders = reinterpret_cast<IMAGE_NT_HEADERS*>(base + dosHeader->e_lfanew);
-        if (ntHeaders->Signature != IMAGE_NT_SIGNATURE) return false;
-        IMAGE_DATA_DIRECTORY exportDirInfo = ntHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
-        if (exportDirInfo.Size == 0 || exportDirInfo.VirtualAddress == 0) return false;
-        DWORD imageSize = ntHeaders->OptionalHeader.SizeOfImage;
-        if (exportDirInfo.VirtualAddress >= imageSize) return false;
-
-        *out_exports = reinterpret_cast<IMAGE_EXPORT_DIRECTORY*>(base + exportDirInfo.VirtualAddress);
-        return true;
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
-}
-
-void HookModuleEntryPoints(HMODULE hMod, const std::wstring& modPath) {
-    if (!hMod) return;
-
-    std::wstring lowerPath = modPath;
-    if (lowerPath.empty()) return;
-
-    CharLowerBuffW(lowerPath.data(), static_cast<DWORD>(lowerPath.size()));
-
-    if (lowerPath.find(L".aex") == std::wstring::npos &&
-        lowerPath.find(L"\\plug-ins\\") == std::wstring::npos) {
-        return;
-    }
-
-    IMAGE_EXPORT_DIRECTORY* exports = nullptr;
-    if (!SafeGetExportDirectory(hMod, &exports)) {
-        return;
-    }
-
-    auto* base = reinterpret_cast<unsigned char*>(hMod);
-    auto* names = reinterpret_cast<DWORD*>(base + exports->AddressOfNames);
-    auto* functions = reinterpret_cast<DWORD*>(base + exports->AddressOfFunctions);
-    auto* ordinals = reinterpret_cast<WORD*>(base + exports->AddressOfNameOrdinals);
-
-    std::lock_guard<std::mutex> lock(g_WrapperMutex);
-
-    for (DWORD i = 0; i < exports->NumberOfNames; i++) {
-        const char* name = reinterpret_cast<const char*>(base + names[i]);
-        if (strcmp(name, "EntryPointFunc") == 0 || strcmp(name, "EffectMain") == 0) {
-            void* pTarget = reinterpret_cast<void*>(base + functions[ordinals[i]]);
-
-            bool alreadyHooked = false;
-            for (int j = 0; j < g_WrapperCount.load(std::memory_order_relaxed); j++) {
-                if (g_OriginalEntryPoints[j].load(std::memory_order_relaxed) == pTarget) [[unlikely]] {
-                    alreadyHooked = true;
-                    break;
-                }
-            }
-            if (alreadyHooked) continue;
-
-            int currentID = g_WrapperCount.load(std::memory_order_relaxed);
-            if (currentID >= WRAPPER_POOL_SIZE) break;
-            void* trampolineBuf = nullptr;
-            if (TryCreateAndEnableHook(pTarget,
-                                       reinterpret_cast<LPVOID>(g_WrapperPool[currentID]),
-                                       reinterpret_cast<LPVOID*>(&trampolineBuf))) {
-                g_OriginalEntryPoints[currentID].store(trampolineBuf, std::memory_order_release);
-                g_WrapperCount.fetch_add(1, std::memory_order_release);
-            }
-        }
-    }
-}
-
-void EnumerateAndHookLoadedModules() {
-    HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, GetCurrentProcessId());
-    if (hSnapshot != INVALID_HANDLE_VALUE) {
-        MODULEENTRY32W me;
-        me.dwSize = sizeof(me);
-        if (Module32FirstW(hSnapshot, &me)) {
-            do {
-                HookModuleEntryPoints(me.hModule, me.szExePath);
-            } while (Module32NextW(hSnapshot, &me));
-        }
-        CloseHandle(hSnapshot);
-    }
-}
-
-typedef HMODULE(WINAPI* LoadLibraryW_t)(LPCWSTR);
-typedef HMODULE(WINAPI* LoadLibraryExW_t)(LPCWSTR, HANDLE, DWORD);
-LoadLibraryW_t Original_LoadLibraryW = nullptr;
-LoadLibraryExW_t Original_LoadLibraryExW = nullptr;
-
-HMODULE WINAPI Hooked_LoadLibraryW(LPCWSTR lpLibFileName) {
-    HMODULE hMod = Original_LoadLibraryW(lpLibFileName);
-    if (hMod && lpLibFileName) {
-        HookModuleEntryPoints(hMod, lpLibFileName);
-    }
-    return hMod;
-}
-
-HMODULE WINAPI Hooked_LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags) {
-    HMODULE hMod = Original_LoadLibraryExW(lpLibFileName, hFile, dwFlags);
-    if (hMod && lpLibFileName) {
-        HookModuleEntryPoints(hMod, lpLibFileName);
-    }
-    return hMod;
-}
-
-#if defined(_MSC_VER)
-#define FIXER_EXPORT __declspec(dllexport)
-#else
-#define FIXER_EXPORT __attribute__((visibility("default")))
+#include <cstring>
+#include <mutex>
+#include <string>
+#include <stdexcept>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+
+// SDKs before the newer UTF string aliases expose these as plain char fields.
+#ifndef PF_DEF_NAME
+#define PF_DEF_NAME name
+#define PF_DEF_NAMESPTR namesptr
+#define PF_DEF_NAMEPTR nameptr
 #endif
 
-extern "C" FIXER_EXPORT PF_Err EntryPointFunc(
-    struct SPBasicSuite* pica_basicP,
-    A_long major_version,
-    A_long minor_version,
-    AEGP_PluginID aegp_plugin_id,
-    AEGP_GlobalRefcon* global_refconP)
-{
-    MH_STATUS status = MH_Initialize();
-    if (status == MH_OK || status == MH_ERROR_ALREADY_INITIALIZED) {
-        HMODULE hKernel32 = GetModuleHandleW(L"kernel32.dll");
-        if (hKernel32) {
-            auto* pLLW = reinterpret_cast<void*>(GetProcAddress(hKernel32, "LoadLibraryW"));
-            if (pLLW) {
-                TryCreateAndEnableHook(pLLW,
-                                       reinterpret_cast<LPVOID>(&Hooked_LoadLibraryW),
-                                       reinterpret_cast<LPVOID*>(&Original_LoadLibraryW));
-            }
+namespace {
+HMODULE self_module{};
+bridge::SourceEncoding source_encoding = bridge::SourceEncoding::Auto;
+bool legacy_bridge{}, enabled{}, only_english = true;
+bridge::DecodeFn original_decode = &MultiByteToWideChar;
+bridge::EncodeFn original_encode = &WideCharToMultiByte;
+decltype(&LoadLibraryW) original_load{};
+decltype(&LoadLibraryExW) original_load_ex{};
+decltype(&GetProcAddress) original_get_proc = &GetProcAddress;
+std::atomic<unsigned> normalized_count{}, failed_hooks{};
+std::atomic<unsigned> popup_placeholder_lists{};
+thread_local bool scanning{};
+constexpr size_t pool_size = 512;
+constexpr size_t effect_pool_size = 2048;
+using EffectFn = PF_Err(*)(PF_Cmd, PF_InData*, PF_OutData*, PF_ParamDef*[], PF_LayerDef*, void*);
+using AddFn = decltype(PF_InData::inter.add_param);
+using UpdateFn = decltype(PF_ParamUtilsSuite3::PF_UpdateParamUI);
+std::atomic<UpdateFn> original_update{};
+std::mutex hook_mutex;
+struct Slot { std::atomic<void*> original{}; HMODULE module{}; };
+std::array<Slot, effect_pool_size> effects;
+std::array<Slot, pool_size> registration2, registration1;
+std::array<Slot, 64> add_callbacks;
+size_t effect_count{}, reg2_count{}, reg1_count{}, add_count{};
+struct Hook { void* wrapper; void* original; };
+std::unordered_map<void*, Hook> hooks;
+std::unordered_set<HMODULE> scanned_modules;
+std::wstring config_path, log_path;
 
-            auto* pLLEW = reinterpret_cast<void*>(GetProcAddress(hKernel32, "LoadLibraryExW"));
-            if (pLLEW) {
-                TryCreateAndEnableHook(pLLEW,
-                                       reinterpret_cast<LPVOID>(&Hooked_LoadLibraryExW),
-                                       reinterpret_cast<LPVOID*>(&Original_LoadLibraryExW));
+void Log(const char* text) noexcept {
+    OutputDebugStringA(text);
+    OutputDebugStringA("\n");
+    if (log_path.empty()) return;
+    HANDLE file = CreateFileW(log_path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return;
+    DWORD written{};
+    WriteFile(file, text, static_cast<DWORD>(strlen(text)), &written, nullptr);
+    WriteFile(file, "\r\n", 2, &written, nullptr);
+    CloseHandle(file);
+}
+bridge::HostVersion ReadHostVersion() {
+    wchar_t path[32768]{};
+    if (!GetModuleFileNameW(nullptr, path, 32768)) return {};
+    DWORD ignored{};
+    DWORD n = GetFileVersionInfoSizeW(path, &ignored);
+    if (!n) return {};
+    std::vector<char> data(n);
+    if (!GetFileVersionInfoW(path, 0, n, data.data())) return {};
+    VS_FIXEDFILEINFO* info{}; UINT bytes{};
+    if (!VerQueryValueW(data.data(), L"\\", reinterpret_cast<void**>(&info), &bytes) ||
+        bytes < sizeof(*info) || info->dwSignature != 0xFEEF04BD) return {};
+    return {HIWORD(info->dwFileVersionMS), LOWORD(info->dwFileVersionMS), HIWORD(info->dwFileVersionLS)};
+}
+bool IsEnglish(SPBasicSuite* basic) {
+    if (!basic) return false;
+    const PFAppSuite6* app{};
+    if (basic->AcquireSuite(kPFAppSuite, kPFAppSuiteVersion6, reinterpret_cast<const void**>(&app)) || !app) return false;
+    A_char language[PF_APP_LANG_TAG_SIZE]{};
+    auto err = app->PF_AppGetLanguage(language);
+    basic->ReleaseSuite(kPFAppSuite, kPFAppSuiteVersion6);
+    char msg[100]{};
+    sprintf_s(msg, "AE UI language: %.5s", language);
+    Log(msg);
+    return !err && language[0] == 'e' && language[1] == 'n';
+}
+std::wstring ConfigValue(const wchar_t* key, const wchar_t* fallback) {
+    wchar_t value[128]{};
+    GetPrivateProfileStringW(L"Bridge", key, fallback, value, 128, config_path.c_str());
+    return value;
+}
+void ReadSettings(bridge::HostVersion host) {
+    wchar_t path[32768]{};
+    GetModuleFileNameW(self_module, path, 32768);
+    config_path = path;
+    config_path = config_path.substr(0, config_path.find_last_of(L"\\/") + 1) + L"AE-Locale-Bridge.ini";
+    wchar_t temp[32768]{};
+    GetTempPathW(32768, temp);
+    log_path = std::wstring(temp) + L"AE-Locale-Bridge-" + std::to_wstring(GetCurrentProcessId()) + L".log";
+    enabled = ConfigValue(L"Enabled", L"1") == L"1";
+    only_english = ConfigValue(L"OnlyEnglish", L"1") == L"1";
+    const auto source = ConfigValue(L"SourceEncoding", L"auto");
+    if (source == L"gbk") source_encoding = bridge::SourceEncoding::GBK;
+    else if (source == L"utf8") source_encoding = bridge::SourceEncoding::UTF8;
+    else if (source != L"auto") { enabled = false; Log("Invalid SourceEncoding; disabled."); }
+    const auto mode = ConfigValue(L"LegacyBridge", L"auto");
+    auto policy = bridge::BridgeMode::Auto;
+    if (mode == L"on") policy = bridge::BridgeMode::On;
+    else if (mode == L"off") policy = bridge::BridgeMode::Off;
+    else if (mode != L"auto") { enabled = false; Log("Invalid LegacyBridge; disabled."); }
+    legacy_bridge = bridge::UseLegacyBridge(host, policy);
+    char msg[200]{};
+    sprintf_s(msg, "AE Locale Bridge 0.2.1; host=%u.%u.%u; ACP=%u; OEMCP=%u; legacy=%u",
+              host.major, host.minor, host.patch, GetACP(), GetOEMCP(), legacy_bridge);
+    Log(msg);
+}
+std::string NormalizeText(std::string_view input) {
+    auto output = bridge::Normalize(input, source_encoding, original_decode, original_encode);
+    if (!output.empty()) ++normalized_count;
+    return output;
+}
+const char* FixPointer(const char* input) {
+    if (!input) return input;
+    const auto n = strnlen_s(input, 65536);
+    if (!n || n >= 65536) return input;
+    auto output = NormalizeText({input, n});
+    auto value = output.empty() ? std::string_view(input, n) : std::string_view(output);
+    if (legacy_bridge) bridge::RegisterDisplayText(value);
+    return output.empty() ? input : bridge::Intern(value);
+}
+template<size_t N> bool FixArray(char (&value)[N]) {
+    const auto n = strnlen_s(value, N);
+    if (!n || n == N) return false; // An unterminated SDK field is not a C string.
+    auto output = NormalizeText({value, n});
+    if (!output.empty()) {
+        size_t copied = bridge::UTF8Prefix(output, N - 1);
+        memcpy(value, output.data(), copied);
+        value[copied] = '\0';
+    }
+    if (legacy_bridge) bridge::RegisterDisplayText(value);
+    return !output.empty();
+}
+void InspectPopupSource(const char* text) {
+    if (!text) return;
+    const auto n = strnlen_s(text, 65536);
+    if (!n || n == 65536) return;
+    auto list = std::string_view(text, n);
+    size_t begin{};
+    for (size_t end = 0; end <= n; ++end) {
+        if (end != n && list[end] != '|') continue;
+        auto item = list.substr(begin, end - begin);
+        if (item.find('?') != item.npos && item.find_first_not_of("? (-)\t") == item.npos) {
+            if (popup_placeholder_lists.fetch_add(1, std::memory_order_relaxed) == 0)
+                Log("Popup input already has placeholder-only items before host conversion; original translated text may be lost upstream.");
+            break;
+        }
+        begin = end + 1;
+    }
+}
+bool FixParam(PF_ParamDef* def) {
+    if (!def) return false;
+    bool changed = FixArray(def->PF_DEF_NAME);
+    switch (def->param_type) {
+        case PF_Param_POPUP:
+            InspectPopupSource(def->u.pd.u.PF_DEF_NAMESPTR);
+            def->u.pd.u.PF_DEF_NAMESPTR = FixPointer(def->u.pd.u.PF_DEF_NAMESPTR);
+            break;
+        case PF_Param_CHECKBOX: def->u.bd.u.PF_DEF_NAMEPTR = FixPointer(def->u.bd.u.PF_DEF_NAMEPTR); break;
+        case PF_Param_BUTTON: def->u.button_d.u.PF_DEF_NAMESPTR = FixPointer(def->u.button_d.u.PF_DEF_NAMESPTR); break;
+        case PF_Param_SLIDER: FixArray(def->u.sd.value_desc); break;
+        case PF_Param_FIX_SLIDER: FixArray(def->u.fd.value_str); FixArray(def->u.fd.value_desc); break;
+        case PF_Param_FLOAT_SLIDER: FixArray(def->u.fs_d.value_desc); break;
+        default: break;
+    }
+    return changed;
+}
+// Host parameter lists may allocate only the active union member (SDK contract).
+PF_ParamDef CopyParam(const PF_ParamDef* def) {
+    PF_ParamDef copy{};
+    memcpy(&copy, def, offsetof(PF_ParamDef, u));
+    size_t n{};
+    switch (def->param_type) {
+#define COPY_SIZE(type, member) case type: n = sizeof(copy.u.member); break
+        COPY_SIZE(PF_Param_LAYER, ld);
+        COPY_SIZE(PF_Param_SLIDER, sd);
+        COPY_SIZE(PF_Param_FIX_SLIDER, fd);
+        COPY_SIZE(PF_Param_FLOAT_SLIDER, fs_d);
+        COPY_SIZE(PF_Param_ANGLE, ad);
+        COPY_SIZE(PF_Param_CHECKBOX, bd);
+        COPY_SIZE(PF_Param_COLOR, cd);
+        COPY_SIZE(PF_Param_POINT, td);
+        COPY_SIZE(PF_Param_POPUP, pd);
+        COPY_SIZE(PF_Param_ARBITRARY_DATA, arb_d);
+        COPY_SIZE(PF_Param_PATH, path_d);
+        COPY_SIZE(PF_Param_BUTTON, button_d);
+        COPY_SIZE(PF_Param_POINT_3D, point3d_d);
+#undef COPY_SIZE
+        case PF_Param_NO_DATA:
+        case PF_Param_GROUP_START:
+        case PF_Param_GROUP_END: break;
+        default: throw std::invalid_argument("Unsupported SDK parameter layout");
+    }
+    if (n) memcpy(&copy.u, &def->u, n);
+    return copy;
+}
+template<size_t I> PF_Err FixedAdd(PF_ProgPtr ref, PF_ParamIndex index, PF_ParamDef* def) {
+    auto original = reinterpret_cast<AddFn>(add_callbacks[I].original.load(std::memory_order_acquire));
+    if (!original) return PF_Err_INTERNAL_STRUCT_DAMAGED;
+    PF_ParamDef copy{};
+    bool fixed{};
+    try {
+        if (def) { copy = CopyParam(def); FixParam(&copy); fixed = true; }
+    } catch (...) { Log("Parameter normalization failed; forwarding original."); }
+    return original(ref, index, fixed ? &copy : def);
+}
+void HookHostAdd(AddFn target);
+PF_Err FixedUpdate(PF_ProgPtr ref, PF_ParamIndex index, const PF_ParamDef* def) {
+    auto original = original_update.load(std::memory_order_acquire);
+    if (!original) return PF_Err_INTERNAL_STRUCT_DAMAGED;
+    PF_ParamDef copy{};
+    bool fixed{};
+    try {
+        if (def) { copy = CopyParam(def); FixParam(&copy); fixed = true; }
+    } catch (...) { Log("UI normalization failed; forwarding original."); }
+    return original(ref, index, fixed ? &copy : def);
+}
+template<size_t I> PF_Err EffectEntry(PF_Cmd cmd, PF_InData* input, PF_OutData* out, PF_ParamDef* params[], PF_LayerDef* output, void* extra) {
+    auto original = reinterpret_cast<EffectFn>(effects[I].original.load(std::memory_order_acquire));
+    if (!original) return PF_Err_INTERNAL_STRUCT_DAMAGED;
+    if (cmd == PF_Cmd_PARAMS_SETUP && input && input->inter.add_param) {
+        try { HookHostAdd(input->inter.add_param); }
+        catch (...) { Log("Host add_param hook failed."); }
+        return original(cmd, input, out, params, output, extra);
+    }
+    // Do not mutate host-owned params during render or scan variably-sized unions.
+    if ((cmd == PF_Cmd_UPDATE_PARAMS_UI || cmd == PF_Cmd_USER_CHANGED_PARAM) && input && out && params) {
+        const auto result = original(cmd, input, out, params, output, extra);
+        auto update = original_update.load(std::memory_order_acquire);
+        if (!result && update) {
+            for (PF_ParamIndex p = 1; p < input->num_params && p < 10000; ++p) {
+                if (!params[p]) continue;
+                try {
+                    auto copy = CopyParam(params[p]);
+                    if (FixArray(copy.PF_DEF_NAME)) {
+                        if (!update(input->effect_ref, p, &copy)) out->out_flags |= PF_OutFlag_REFRESH_UI;
+                    }
+                } catch (...) { Log("Post-UI name normalization failed."); }
             }
         }
-
-        EnumerateAndHookLoadedModules();
+        return result;
     }
-    return PF_Err_NONE;
+    return original(cmd, input, out, params, output, extra);
+}
+template<typename F> bool Install(void* target, void* detour, F publish) {
+    if (!target) return false;
+    // caller holds hook_mutex; publish trampoline BEFORE another thread sees detour.
+    if (hooks.contains(target)) return true;
+    void* trampoline{};
+    if (MH_CreateHook(target, detour, &trampoline) != MH_OK) { ++failed_hooks; return false; }
+    publish(trampoline);
+    if (MH_EnableHook(target) != MH_OK) {
+        MH_RemoveHook(target); ++failed_hooks; return false;
+    }
+    hooks.emplace(target, Hook{detour, trampoline});
+    return true;
+}
+template<size_t... I> constexpr auto AddPool(std::index_sequence<I...>) {
+    return std::array<AddFn, sizeof...(I)>{&FixedAdd<I>...};
+}
+constexpr auto add_pool = AddPool(std::make_index_sequence<64>{});
+void HookHostAdd(AddFn target) {
+    std::lock_guard lock(hook_mutex);
+    if (hooks.contains(reinterpret_cast<void*>(target))) return;
+    if (add_count == add_callbacks.size()) { Log("Host add_param wrapper pool exhausted."); return; }
+    auto id = add_count++;
+    if (!Install(reinterpret_cast<void*>(target), reinterpret_cast<void*>(add_pool[id]),
+        [id](void* p) { add_callbacks[id].original.store(p, std::memory_order_release); }))
+        Log("Host add_param hook failed.");
+}
+template<size_t... I> constexpr auto EffectPool(std::index_sequence<I...>) {
+    return std::array<EffectFn, sizeof...(I)>{&EffectEntry<I>...};
+}
+constexpr auto effect_pool = EffectPool(std::make_index_sequence<effect_pool_size>{});
+void HookEffect(HMODULE module, const char* name) {
+    auto target = reinterpret_cast<void*>(original_get_proc(module, name));
+    if (!target) return;
+    std::lock_guard lock(hook_mutex);
+    if (hooks.contains(target)) return;
+    if (effect_count == effect_pool_size) { Log("Effect wrapper pool exhausted."); return; }
+    const auto id = effect_count++;
+    effects[id].module = module;
+    if (!Install(target, reinterpret_cast<void*>(effect_pool[id]), [id](void* p) { effects[id].original.store(p, std::memory_order_release); }))
+        Log("Effect entry hook failed.");
+}
+struct RegistrationContext {
+    HMODULE module;
+    PF_PluginDataCB2 callback2;
+    PF_PluginDataCB callback1;
+    RegistrationContext* previous;
+};
+thread_local RegistrationContext* registration_context{};
+A_Err Register2(PF_PluginDataPtr ptr, const A_u_char* name, const A_u_char* match, const A_u_char* category,
+                const A_u_char* entry, A_long kind, A_long major, A_long minor, A_long reserved, const A_u_char* url) {
+    auto* ctx = registration_context;
+    if (!ctx || !ctx->callback2) return A_Err_GENERIC;
+    if (kind == 'eFKT') {
+        try {
+            if (entry) HookEffect(ctx->module, reinterpret_cast<const char*>(entry));
+            name = reinterpret_cast<const A_u_char*>(FixPointer(reinterpret_cast<const char*>(name)));
+            category = reinterpret_cast<const A_u_char*>(FixPointer(reinterpret_cast<const char*>(category)));
+        } catch (...) { Log("Effect registration normalization failed."); }
+    }
+    return ctx->callback2(ptr, name, match, category, entry, kind, major, minor, reserved, url);
+}
+A_Err Register1(PF_PluginDataPtr ptr, const A_u_char* name, const A_u_char* match, const A_u_char* category,
+                const A_u_char* entry, A_long kind, A_long major, A_long minor, A_long reserved) {
+    auto* ctx = registration_context;
+    if (!ctx || !ctx->callback1) return A_Err_GENERIC;
+    if (kind == 'eFKT') {
+        try {
+            if (entry) HookEffect(ctx->module, reinterpret_cast<const char*>(entry));
+            name = reinterpret_cast<const A_u_char*>(FixPointer(reinterpret_cast<const char*>(name)));
+            category = reinterpret_cast<const A_u_char*>(FixPointer(reinterpret_cast<const char*>(category)));
+        } catch (...) { Log("Effect registration normalization failed."); }
+    }
+    return ctx->callback1(ptr, name, match, category, entry, kind, major, minor, reserved);
+}
+template<size_t I, bool V2> A_Err RegistrationEntry(PF_PluginDataPtr ptr,
+    std::conditional_t<V2, PF_PluginDataCB2, PF_PluginDataCB> callback,
+    SPBasicSuite* basic, const char* host, const char* version) {
+    auto& slot = V2 ? registration2[I] : registration1[I];
+    RegistrationContext context{slot.module, nullptr, nullptr, registration_context};
+    if constexpr (V2) context.callback2 = callback; else context.callback1 = callback;
+    struct Restore { RegistrationContext* previous; ~Restore() { registration_context = previous; } } restore{registration_context};
+    registration_context = &context;
+    if constexpr (V2) {
+        auto fn = reinterpret_cast<PluginDataEntryFunction2Ptr>(slot.original.load(std::memory_order_acquire));
+        return fn(ptr, &Register2, basic, host, version);
+    } else {
+        auto fn = reinterpret_cast<PluginDataEntryFunctionPtr>(slot.original.load(std::memory_order_acquire));
+        return fn(ptr, &Register1, basic, host, version);
+    }
+}
+template<bool V2, size_t... I> constexpr auto RegistrationPool(std::index_sequence<I...>) {
+    using Fn = std::conditional_t<V2, PluginDataEntryFunction2Ptr, PluginDataEntryFunctionPtr>;
+    return std::array<Fn, sizeof...(I)>{&RegistrationEntry<I,V2>...};
+}
+constexpr auto reg2_pool = RegistrationPool<true>(std::make_index_sequence<pool_size>{});
+constexpr auto reg1_pool = RegistrationPool<false>(std::make_index_sequence<pool_size>{});
+template<bool V2> void HookRegistration(HMODULE module) {
+    auto target = reinterpret_cast<void*>(original_get_proc(module, V2 ? "PluginDataEntryFunction2" : "PluginDataEntryFunction"));
+    if (!target) return;
+    std::lock_guard lock(hook_mutex);
+    if (hooks.contains(target)) return;
+    auto& count = V2 ? reg2_count : reg1_count;
+    auto& slots = V2 ? registration2 : registration1;
+    if (count == pool_size) { Log("Registration wrapper pool exhausted."); return; }
+    auto id = count++;
+    slots[id].module = module;
+    void* wrapper{};
+    if constexpr (V2) wrapper = reinterpret_cast<void*>(reg2_pool[id]); else wrapper = reinterpret_cast<void*>(reg1_pool[id]);
+    Install(target, wrapper, [&](void* p) { slots[id].original.store(p, std::memory_order_release); });
+}
+// Win32 PiPL is a 16-bit resource version followed by little-endian PIPropertyList.
+// Parse bounds before reading; no PE export scanning or AEGP/effect ABI guesses.
+BOOL CALLBACK VisitPiPL(HMODULE module, LPCWSTR type, LPWSTR name, LONG_PTR) {
+    auto resource = FindResourceW(module, name, type);
+    auto size = SizeofResource(module, resource);
+    auto data = static_cast<const unsigned char*>(LockResource(LoadResource(module, resource)));
+    if (!data || size < 10) return TRUE;
+    auto read32 = [&](size_t pos) { DWORD result{}; memcpy(&result, data + pos, 4); return result; };
+    const size_t start = 2;
+    if (read32(start) != 0) return TRUE;
+    auto count = read32(start + 4);
+    if (count > 4096) return TRUE;
+    size_t pos = start + 8;
+    bool effect{};
+    std::vector<std::string> entries;
+    for (DWORD i = 0; i < count; ++i) {
+        if (pos > size || size - pos < 16) return TRUE;
+        auto vendor = read32(pos), key = read32(pos+4), len = read32(pos+12);
+        pos += 16;
+        if (len > size - pos) return TRUE;
+        if (vendor == '8BIM' && key == 'kind' && len == 4) effect = read32(pos) == 'eFKT';
+        if (vendor == '8BIM' && key == '8664' && len && len < 1024) {
+            auto entry = reinterpret_cast<const char*>(data + pos);
+            auto n = strnlen_s(entry, len);
+            if (n && n < len) entries.emplace_back(entry, n);
+        }
+        const size_t padded = (static_cast<size_t>(len) + 3) & ~size_t(3);
+        if (padded > size - pos) return TRUE;
+        pos += padded;
+    }
+    if (effect) for (const auto& entry : entries) HookEffect(module, entry.c_str());
+    return TRUE;
+}
+void HookModule(HMODULE module) {
+    if (!module || module == self_module || scanning) return;
+    struct ScanGuard { ScanGuard() { scanning = true; } ~ScanGuard() { scanning = false; } } guard;
+    wchar_t path[32768]{};
+    if (!GetModuleFileNameW(module, path, 32768)) return;
+    auto n = wcslen(path);
+    if (n < 4 || _wcsicmp(path + n - 4, L".aex")) return;
+    {
+        std::lock_guard lock(hook_mutex);
+        if (!scanned_modules.insert(module).second) return;
+    }
+    // Hook trampolines and interned UI pointers must outlive host-held callbacks.
+    HMODULE pinned{};
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                            reinterpret_cast<LPCWSTR>(module), &pinned)) return;
+    try {
+        HookRegistration<true>(module);
+        HookRegistration<false>(module);
+        EnumResourceNamesW(module, L"PiPL", &VisitPiPL, 0);
+    } catch (...) { Log("Module hook failed."); }
+}
+void EnumerateModules() {
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, GetCurrentProcessId());
+    if (snapshot == INVALID_HANDLE_VALUE) return;
+    MODULEENTRY32W item{}; item.dwSize = sizeof(item);
+    if (Module32FirstW(snapshot, &item)) do { HookModule(item.hModule); } while (Module32NextW(snapshot, &item));
+    CloseHandle(snapshot);
+}
+HMODULE WINAPI FixedLoad(LPCWSTR path) {
+    auto module = original_load(path);
+    const auto error = GetLastError();
+    HookModule(module);
+    SetLastError(error);
+    return module;
+}
+HMODULE WINAPI FixedLoadEx(LPCWSTR path, HANDLE file, DWORD flags) {
+    auto module = original_load_ex(path, file, flags);
+    const auto error = GetLastError();
+    if (!(flags & (LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE | LOAD_LIBRARY_AS_DATAFILE_EXCLUSIVE | DONT_RESOLVE_DLL_REFERENCES)))
+        HookModule(module);
+    SetLastError(error);
+    return module;
+}
+FARPROC WINAPI FixedGetProc(HMODULE module, LPCSTR name) {
+    // Also covers modules loaded through LoadLibraryA, already-loaded DLLs and cached loads.
+    HookModule(module);
+    return original_get_proc(module, name);
+}
+int WINAPI FixedDecode(UINT cp, DWORD flags, LPCCH input, int count, LPWSTR output, int capacity) {
+    try {
+        auto forward = +[](UINT codepage, DWORD f, LPCCH s, int n, LPWSTR w, int c) -> int {
+            return original_decode(codepage, f, s, n, w, c);
+        };
+        // Do not change LastError merely by inspecting an unrelated conversion.
+        const auto saved = GetLastError();
+        auto result = bridge::DecodeDisplayText(forward, cp, flags, input, count, output, capacity, legacy_bridge);
+        if (result) SetLastError(saved);
+        return result;
+    } catch (...) { return original_decode(cp, flags, input, count, output, capacity); }
+}
+int WINAPI FixedEncode(UINT cp, DWORD flags, LPCWCH input, int count, LPSTR output,
+                       int capacity, LPCCH default_char, LPBOOL used_default_char) {
+    try {
+        return bridge::EncodeDisplayText(original_encode, cp, flags, input, count, output,
+                                          capacity, default_char, used_default_char, legacy_bridge);
+    } catch (...) {
+        return original_encode(cp, flags, input, count, output, capacity, default_char, used_default_char);
+    }
+}
+void InstallHostHooks(SPBasicSuite* basic) {
+    std::lock_guard lock(hook_mutex);
+    if (legacy_bridge && !Install(reinterpret_cast<void*>(&MultiByteToWideChar), reinterpret_cast<void*>(&FixedDecode),
+        [](void* p) { original_decode = reinterpret_cast<bridge::DecodeFn>(p); })) {
+        Log("Legacy decoder hook failed; disabled.");
+        enabled = false;
+        return;
+    }
+    if (legacy_bridge && !Install(reinterpret_cast<void*>(&WideCharToMultiByte), reinterpret_cast<void*>(&FixedEncode),
+        [](void* p) { original_encode = reinterpret_cast<bridge::EncodeFn>(p); }))
+        Log("Legacy menu encoder hook failed; decoder bridge remains active.");
+    const PF_ParamUtilsSuite3* suite{};
+    if (basic && !basic->AcquireSuite(kPFParamUtilsSuite, kPFParamUtilsSuiteVersion3, reinterpret_cast<const void**>(&suite)) && suite) {
+        Install(reinterpret_cast<void*>(suite->PF_UpdateParamUI), reinterpret_cast<void*>(&FixedUpdate),
+            [](void* p) { original_update.store(reinterpret_cast<UpdateFn>(p), std::memory_order_release); });
+        basic->ReleaseSuite(kPFParamUtilsSuite, kPFParamUtilsSuiteVersion3);
+    } else Log("PF Param Utils Suite3 unavailable; dynamic UI update hook skipped.");
+    Install(reinterpret_cast<void*>(&LoadLibraryW), reinterpret_cast<void*>(&FixedLoad),
+        [](void* p) { original_load = reinterpret_cast<decltype(original_load)>(p); });
+    Install(reinterpret_cast<void*>(&LoadLibraryExW), reinterpret_cast<void*>(&FixedLoadEx),
+        [](void* p) { original_load_ex = reinterpret_cast<decltype(original_load_ex)>(p); });
+    Install(reinterpret_cast<void*>(&GetProcAddress), reinterpret_cast<void*>(&FixedGetProc),
+        [](void* p) { original_get_proc = reinterpret_cast<decltype(original_get_proc)>(p); });
+}
+A_Err OnDeath(AEGP_GlobalRefcon, AEGP_DeathRefcon) {
+    char message[400]{};
+    sprintf_s(message, "Shutdown; normalized=%u; decoder_hits=%llu; encoder_hits=%llu; encoder_buffer_failures=%llu; popup_placeholder_lists=%u; effects=%zu; add_callbacks=%zu; registration2=%zu; registration1=%zu; hook_failures=%u",
+        normalized_count.load(), bridge::DecoderHitCount(), bridge::EncoderHitCount(), bridge::EncoderBufferFailureCount(),
+        popup_placeholder_lists.load(), effect_count, add_count, reg2_count, reg1_count, failed_hooks.load());
+    Log(message);
+    // Keep hooks valid through shutdown: other plugins can still call them.
+    // No MH_ALL_HOOKS, uninitialize or thread suspension from DllMain.
+    return A_Err_NONE;
+}
 }
 
-BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
-    if (fdwReason == DLL_PROCESS_ATTACH) {
-        DisableThreadLibraryCalls(hinstDLL);
-    } 
-    else if (fdwReason == DLL_PROCESS_DETACH) {
-        MH_DisableHook(MH_ALL_HOOKS);
-        MH_Uninitialize();
-    }
+extern "C" __declspec(dllexport) A_Err EntryPointFunc(SPBasicSuite* basic, A_long, A_long,
+                                                     AEGP_PluginID plugin, AEGP_GlobalRefcon*) {
+    try {
+        auto version = ReadHostVersion();
+        ReadSettings(version);
+        if (!bridge::IsSupported(version)) { Log("AE earlier than 24.0 or unknown executable version; inactive."); return A_Err_NONE; }
+        if (!enabled) { Log("Disabled by configuration."); return A_Err_NONE; }
+        if (only_english && !IsEnglish(basic)) { Log("English UI required or language suite unavailable; inactive."); return A_Err_NONE; }
+        HMODULE pinned{};
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                          reinterpret_cast<LPCWSTR>(&EntryPointFunc), &pinned);
+        auto status = MH_Initialize();
+        if (status != MH_OK && status != MH_ERROR_ALREADY_INITIALIZED) { Log("MinHook initialization failed."); return A_Err_NONE; }
+        InstallHostHooks(basic);
+        if (!enabled) return A_Err_NONE;
+        EnumerateModules();
+        const AEGP_RegisterSuite5* registration{};
+        if (basic && !basic->AcquireSuite(kAEGPRegisterSuite, kAEGPRegisterSuiteVersion5, reinterpret_cast<const void**>(&registration)) && registration) {
+            registration->AEGP_RegisterDeathHook(plugin, &OnDeath, nullptr);
+            basic->ReleaseSuite(kAEGPRegisterSuite, kAEGPRegisterSuiteVersion5);
+        }
+        Log("Active; host API hooks installed.");
+    } catch (...) { Log("Initialization failed; see build/host diagnostics."); }
+    return A_Err_NONE;
+}
+BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID) {
+    if (reason == DLL_PROCESS_ATTACH) { self_module = module; DisableThreadLibraryCalls(module); }
     return TRUE;
 }

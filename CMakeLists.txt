@@ -1,116 +1,87 @@
 cmake_minimum_required(VERSION 3.20...4.3)
-project(UTF8Fixer LANGUAGES CXX C)
-
-# ==============================================================================
-# 1. 全局配置
-# ==============================================================================
-
+project(AELocaleBridge VERSION 0.2.1 LANGUAGES C CXX RC)
+if(NOT WIN32 OR NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+    message(FATAL_ERROR "Use Windows x64 with MSVC (AE 2024+).")
+endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-
-# AE SDK 路径配置
-set(AE_SDK_PATH "${CMAKE_CURRENT_SOURCE_DIR}/AE_SDK" CACHE PATH "Path to Adobe After Effects SDK")
-
-# ==============================================================================
-# 2. 依赖管理 - 自动集成 MinHook
-# ==============================================================================
-
-include(FetchContent)
-FetchContent_Declare(
-    minhook
-    GIT_REPOSITORY "https://github.com/TsudaKageyu/minhook.git"
-    GIT_TAG        master
-)
-FetchContent_MakeAvailable(minhook)
-
-# ==============================================================================
-# 3. 目标构建与依赖关联
-# ==============================================================================
-
-add_library(${PROJECT_NAME} MODULE UTF8Fixer.cpp)
-
-# 包含 SDK 与头文件目录
-target_include_directories(${PROJECT_NAME} PRIVATE 
-    ${AE_SDK_PATH}/Headers 
-    ${AE_SDK_PATH}/Headers/SP 
-    ${AE_SDK_PATH}/Util 
-    ${AE_SDK_PATH}/Resources
-)
-
-# 链接核心依赖库
-target_link_libraries(${PROJECT_NAME} PRIVATE 
-    minhook 
-    user32.lib 
-    kernel32.lib
-)
-
-# ==============================================================================
-# 4. 性能优化与 PiPL 资源编译
-# ==============================================================================
-
-if(WIN32)
-    add_compile_definitions(_CRT_SECURE_NO_WARNINGS MSWindows WIN32)
-
-    if(MSVC)
-        target_compile_options(${PROJECT_NAME} PRIVATE
-            /EHa                        # 启用 SEH
-            /O2                         # 优化速度
-            /GF                         # 启用只读字符串池化
-            /Gy                         # 启用函数级链接
-            /Oi                         # 启用内部函数
-            $<$<CONFIG:Release>:/GL>    # Release 模式下启用全程序优化
-        )
-
-        target_link_options(${PROJECT_NAME} PRIVATE
-            /OPT:REF                    # 移除未引用代码与数据
-            /OPT:ICF                    # 合并相同的 COMDAT 块
-            $<$<CONFIG:Release>:/LTCG>  # Release 模式下启用链接时间代码生成
-        )
-    endif()
-
-    # 重命名输出文件为 AE 规范的插件名称与后缀 (.aex)
-    set_target_properties(${PROJECT_NAME} PROPERTIES 
-        OUTPUT_NAME "!00_UTF8_Fixer" 
-        SUFFIX ".aex"
-    )
-    
-    # 资源编译中间路径定义
-    set(AFX_REZ   "${AE_SDK_PATH}/Resources/PiPLtool.exe")
-    set(PIPL_SRC  "${CMAKE_CURRENT_SOURCE_DIR}/UTF8FixerPiPL.r")
-    set(RR_FILE   "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}.rr")
-    set(RRC_FILE  "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}.rrc")
-    set(RC_FILE   "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}.rc")
-    
-    # 步骤 1: 预处理 .r 资源文件
-    add_custom_command(
-        OUTPUT ${RR_FILE}
-        COMMAND cl /utf-8 
-                   /I "${AE_SDK_PATH}/Headers" 
-                   /I "${AE_SDK_PATH}/Headers/SP" 
-                   /I "${AE_SDK_PATH}/Util" 
-                   /I "${AE_SDK_PATH}/Resources" 
-                   /D "MSWindows" 
-                   /EP "${PIPL_SRC}" > "${RR_FILE}"
-        DEPENDS "${PIPL_SRC}"
-        VERBATIM
-    )
-    
-    # 步骤 2: 使用 PiPLtool 编译中间资源
-    add_custom_command(
-        OUTPUT ${RRC_FILE}
-        COMMAND "${AFX_REZ}" "${RR_FILE}" "${RRC_FILE}"
-        DEPENDS ${RR_FILE}
-    )
-    
-    # 步骤 3: 再次调用预处理器生成标准 .rc 描述文件
-    add_custom_command(
-        OUTPUT ${RC_FILE}
-        COMMAND cl /utf-8 /D "MSWindows" /EP "${RRC_FILE}" > "${RC_FILE}"
-        DEPENDS ${RRC_FILE}
-        VERBATIM
-    )
-
-    # 将生成的资源编译结果链入目标
-    target_sources(${PROJECT_NAME} PRIVATE ${RC_FILE})
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../May2023_AfterEffectsSDK/Examples/Headers/AEConfig.h")
+    set(sdk_default "${CMAKE_CURRENT_SOURCE_DIR}/../May2023_AfterEffectsSDK/Examples")
+else()
+    set(sdk_default "${CMAKE_CURRENT_SOURCE_DIR}/AE_SDK")
+endif()
+set(AE_SDK_PATH "${sdk_default}" CACHE PATH "AE SDK Examples directory (Headers, Resources, Util)")
+if(EXISTS "${AE_SDK_PATH}/Examples/Headers/AEConfig.h")
+    set(AE_SDK_PATH "${AE_SDK_PATH}/Examples")
+endif()
+if(NOT EXISTS "${AE_SDK_PATH}/Headers/AEConfig.h")
+    message(FATAL_ERROR "AE_SDK_PATH must contain Headers/AEConfig.h")
+endif()
+set(MINHOOK_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/minhook" CACHE PATH "Offline MinHook v1.3.4 source")
+if(EXISTS "${MINHOOK_SOURCE_DIR}/CMakeLists.txt")
+    add_subdirectory("${MINHOOK_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/minhook")
+else()
+    include(FetchContent)
+    FetchContent_Declare(minhook GIT_REPOSITORY https://github.com/TsudaKageyu/minhook.git
+        GIT_TAG c3fcafdc10146beb5919319d0683e44e3c30d537)
+    FetchContent_MakeAvailable(minhook)
+endif()
+add_library(bridge_encoding STATIC Encoding.cpp)
+target_compile_definitions(bridge_encoding PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_options(bridge_encoding PUBLIC /utf-8 /W4 /EHsc)
+target_include_directories(bridge_encoding PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+add_library(AELocaleBridge MODULE UTF8Fixer.cpp)
+target_include_directories(AELocaleBridge PRIVATE "${AE_SDK_PATH}/Headers" "${AE_SDK_PATH}/Headers/SP" "${AE_SDK_PATH}/Util")
+target_compile_definitions(AELocaleBridge PRIVATE MSWindows _CRT_SECURE_NO_WARNINGS)
+target_link_libraries(AELocaleBridge PRIVATE bridge_encoding minhook version user32)
+set_target_properties(AELocaleBridge PROPERTIES OUTPUT_NAME "!00_AE_Locale_Bridge" SUFFIX ".aex")
+function(ae_pipl target input)
+    set(prefix "${CMAKE_CURRENT_BINARY_DIR}/${target}PiPL")
+    add_custom_command(OUTPUT "${prefix}.rr"
+        COMMAND "${CMAKE_CXX_COMPILER}" /nologo /utf-8 /DMSWindows /EP
+            /I "${AE_SDK_PATH}/Headers" /I "${AE_SDK_PATH}/Resources" "${input}" > "${prefix}.rr"
+        DEPENDS "${input}" VERBATIM)
+    add_custom_command(OUTPUT "${prefix}.rrc"
+        COMMAND "${AE_SDK_PATH}/Resources/PiPLtool.exe" "${prefix}.rr" "${prefix}.rrc"
+        DEPENDS "${prefix}.rr" VERBATIM)
+    add_custom_command(OUTPUT "${prefix}.rc"
+        COMMAND "${CMAKE_CXX_COMPILER}" /nologo /DMSWindows /EP "${prefix}.rrc" > "${prefix}.rc"
+        DEPENDS "${prefix}.rrc" VERBATIM)
+    target_sources(${target} PRIVATE "${prefix}.rc")
+endfunction()
+ae_pipl(AELocaleBridge "${CMAKE_CURRENT_SOURCE_DIR}/UTF8FixerPiPL.r")
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(encoding_tests tests/encoding_tests.cpp)
+    target_link_libraries(encoding_tests PRIVATE bridge_encoding)
+    add_test(NAME encoding COMMAND encoding_tests)
+    add_executable(popup_roundtrip_tests tests/popup_roundtrip_tests.cpp)
+    target_link_libraries(popup_roundtrip_tests PRIVATE bridge_encoding)
+    add_test(NAME popup_roundtrip COMMAND popup_roundtrip_tests)
+    add_executable(param_tests tests/param_tests.cpp)
+    target_include_directories(param_tests PRIVATE "${AE_SDK_PATH}/Headers" "${AE_SDK_PATH}/Headers/SP")
+    target_compile_definitions(param_tests PRIVATE MSWindows _CRT_SECURE_NO_WARNINGS)
+    target_link_libraries(param_tests PRIVATE bridge_encoding minhook version user32)
+    add_test(NAME sdk_params COMMAND param_tests)
+    foreach(target FakeModern FakeLegacy)
+        add_library(${target} MODULE tests/FakeEffect.cpp)
+        target_include_directories(${target} PRIVATE "${AE_SDK_PATH}/Headers" "${AE_SDK_PATH}/Headers/SP")
+        target_compile_definitions(${target} PRIVATE MSWindows)
+        target_compile_options(${target} PRIVATE /utf-8)
+        set_target_properties(${target} PROPERTIES SUFFIX ".aex")
+    endforeach()
+    target_compile_definitions(FakeLegacy PRIVATE LEGACY_EFFECT)
+    ae_pipl(FakeLegacy "${CMAKE_CURRENT_SOURCE_DIR}/tests/FakeEffectPiPL.r")
+    foreach(target mock_host mock_modern_host mock_old_host)
+        add_executable(${target} tests/mock_host.cpp tests/host_version.rc)
+        target_include_directories(${target} PRIVATE "${AE_SDK_PATH}/Headers" "${AE_SDK_PATH}/Headers/SP")
+        target_compile_definitions(${target} PRIVATE MSWindows NOMINMAX WIN32_LEAN_AND_MEAN)
+        target_compile_options(${target} PRIVATE /utf-8 /EHsc)
+        add_dependencies(${target} AELocaleBridge FakeModern FakeLegacy)
+        add_test(NAME ${target} COMMAND ${target} "$<TARGET_FILE:AELocaleBridge>" "$<TARGET_FILE:FakeLegacy>")
+    endforeach()
+    target_compile_definitions(mock_modern_host PRIVATE MOCK_MAJOR=26 MOCK_MINOR=2)
+    target_compile_definitions(mock_old_host PRIVATE MOCK_MAJOR=23 MOCK_MINOR=6)
+    add_test(NAME non_english_gate COMMAND mock_host "$<TARGET_FILE:AELocaleBridge>" "$<TARGET_FILE:FakeLegacy>" zh_CN)
 endif()

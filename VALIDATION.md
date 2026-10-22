@@ -1,0 +1,70 @@
+# 0.2.1 验证记录
+
+日期：2026-10-22（Asia/Shanghai）。
+
+**结果：7/7 本地测试通过，共 331 条顶层断言，另含菜单和并发循环检查。** 构建环境沿用下方 0.2.0 记录中的 MSVC x64 和用户提供的 May 2023 SDK。
+
+本次先给模拟宿主增加“Unicode 中文 → 英文 ANSI → 菜单显示”的回归路径，在未修改的 0.2.0 插件上确认 mock_host 失败；加入受登记表限制的反向编码保护后，完整 DLL 测试通过。
+
+| 测试 | 结果 |
+| --- | --- |
+| encoding | 46 条断言；保留原有 UTF-8/GBK、版本策略和登记表并发检查 |
+| popup_roundtrip | 135 条断言；14 项菜单（含两个 `(-` 分隔项）、ANSI 问号复现、双向转换、显式长度、缓冲区不足、默认字符输出、无损 GBK/未登记文字/显式 UTF-8 转发，8 线程循环 |
+| sdk_params | 34 条断言；14 种带保护页的 SDK 内存布局、原始参数保持、纯问号输入诊断 |
+| mock_host | 29 条断言；24.6 英文路径，真实加载修复 AEX，新增 ANSI 菜单回转后中文保持 |
+| mock_modern_host | 29 条断言；26.2 路径，旧版桥接关闭时保持原行为 |
+| mock_old_host | 29 条断言；23.6 仍停用 |
+| non_english_gate | 29 条断言；非英文仍停用 |
+
+用户反馈的真实环境为 AE 24.6.2。提供的 P_Fill.aex 经静态检查仍含英文菜单，未发现截图中的中文标签；未运行或修改该商业插件，也未将其上传或打包。测试使用相同菜单结构的自建中文夹具，而不是声称复现了该汉化版插件的实际显示。
+
+仍需用户用截图中的同一份汉化插件复测。若原文在进入 add_param/PF_UpdateParamUI 前已变为 `?`，编码转换无法恢复丢失的字符；0.2.1 会记录 placeholder-only 输入提示。内部 Adobe/CRT 转换、菜单缓存及固定字节缓冲区也仍可能需要具体宿主适配。
+
+## 0.2.0 历史验证记录
+
+日期：2026-10-22（Asia/Shanghai）。
+
+结论：Windows x64 编译、PE 检查和六组本地测试通过。这是面向英文版 AE 2024+ 的候选适配实现；没有安装或启动真实 Adobe AE，没有第三方插件实测数据。
+
+## 构建环境
+
+- MSVC 19.51 / Visual Studio Build Tools 18.7，Windows SDK 10.0.26100.0。
+- CMake 4.3.1，Release x64，静态 MSVC 运行库。
+- 使用工作区提供的 `May2023_AfterEffectsSDK/Examples`。
+- MinHook v1.3.4 固定提交，见 UPSTREAM.md。
+- Adobe PiPLtool 在沙箱外成功生成资源；沙箱内不能正常启动其 32 位运行时。
+
+## 自动检查
+
+| 测试 | 结果 | 检查内容 |
+| --- | --- | --- |
+| encoding | 46 条断言通过 | GBK 无损转 UTF-8、已有 UTF-8、西文重音和 emoji、非法 Unicode、中文边界截断、版本策略、Win32 显式长度/终止符/缓冲区语义、8 线程缓存和登记表 |
+| sdk_params | 32 条断言通过 | 参数名、popup/checkbox/button/slider/fixed slider/float slider、数值和 ID 保持、14 种参数结构后接 PAGE_NOACCESS 页的读取边界、未知 SDK 参数类型不猜测内存布局 |
+| mock_host | 29 条断言通过 | 24.6 / en_US，启用旧版桥接，804 次参数添加，2 次 UI 更新 |
+| mock_modern_host | 29 条断言通过 | 26.2 / en_US，关闭旧版桥接，UTF-8 归一化仍执行 |
+| mock_old_host | 29 条断言通过 | 23.6 版本门槛，修复不启用 |
+| non_english_gate | 29 条断言通过 | 24.6 / zh_CN，不启用修复 |
+
+合计 **194 条断言，6/6 测试通过**。内存边界和并发测试还包含循环检查。
+
+模拟宿主实际加载构建后的 AEX，调用公开 AEGP 入口并提供 SDK suite。不是只对源码函数做静态推演。覆盖：
+
+- 从宿主 EXE 的版本资源获取版本，不依赖 AEGP ABI 版本入参。
+- 启动前已加载的老式 PiPL 插件、自定义效果入口。
+- 延后加载、没有 PiPL 的插件，通过两个版本的注册回调识别入口。
+- 注册前直接使用缓存的自定义效果入口，同用宿主 add_param 时仍正常修复。
+- AEGP 的同名 EntryPointFunc 保持其原签名与行为。
+- popup 中文整表和单项转换、两个不同 add_param 回调、8 线程添加参数。
+- 动态更新保留滑块上下限，不改宿主或插件持有的原参数结构。
+
+PE 检查：产物是 Windows x64 DLL，导出 `EntryPointFunc`，包含 PiPL 资源；依赖仅 VERSION.dll、KERNEL32.dll，无额外 MinHook DLL 或 MSVC 运行库 DLL。
+
+## 仍需真实环境验证
+
+- 在英文 AE 24.0/24.x、25.x、26.0/26.1、26.2+ 中观察标准参数 UI。
+- 旧版真实宿主是否通过 MultiByteToWideChar 解码登记的中文文本；内部 Adobe/ICU/CRT 路径未覆盖时桥接可能不起作用。
+- 插件扫描缓存、冷启动顺序、不同厂商插件的 UI 更新行为和 MFR 渲染回归。
+- 英文 Windows 的 ACP/OEMCP、中文 Windows、系统 UTF-8 选项的组合。
+- 正常退出期间其他插件回调与模块驻留的实际行为。
+
+上述测试**不能证明全部中文插件或未来 AE 版本均已兼容**。自绘 UI、CEP/UXP/ScriptUI、独立窗口及静态 PiPL 显示名不在此修复范围。发现真实宿主仍乱码时，应结合初始化日志和 decoder_hits 判断桥接是否命中，再决定补充哪条转换路径。

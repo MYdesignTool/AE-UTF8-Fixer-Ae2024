@@ -7,7 +7,7 @@
 resource 'PiPL'(16000) {
     {
         Kind { AEGP },
-        Name { "UTF8 Fixer" },
+        Name { "AE Locale Bridge" },
         Category { "AL's Toolkit" },
         Version { 65536 },
 #ifdef AE_OS_WIN

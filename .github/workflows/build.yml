@@ -1,49 +1,28 @@
-name: Build and Release AE Plugin
-
+name: Build and test English AE bridge
 on:
   push:
-    branches: [ "main" ]
-    tags:
-      - 'v*' # 推送形如 v1.0.0, v1.1 等标签时触发
+    branches: [main]
+    tags: ['v*']
   pull_request:
-    branches: [ "main" ]
-
+    branches: [main]
 permissions:
-  contents: write
-
+  contents: read
 jobs:
-  build-windows:
+  windows:
     runs-on: windows-latest
-
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive
-
-    - name: Set up MSVC Developer Command Prompt
-      uses: ilammy/msvc-dev-cmd@v1
-
-    - name: Configure CMake
-      run: |
-        cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
-
-    - name: Build Project
-      run: |
-        cmake --build build --config Release
-
-    # 保留常规 Artifact 上传
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: UTF8Fixer-Plugin
-        path: build/Release/!00_UTF8_Fixer.aex
-
-    # 仅当推送 Tag 时，才会执行以下发布步骤
-    - name: Create Release
-      if: startsWith(github.ref, 'refs/tags/')
-      uses: softprops/action-gh-release@v2
-      with:
-        files: build/Release/!00_UTF8_Fixer.aex
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/checkout@v4
+      - name: Configure x64 with repository SDK
+        run: cmake -S . -B build -A x64 -DBUILD_TESTING=ON -DAE_SDK_PATH="$env:GITHUB_WORKSPACE/AE_SDK"
+      - name: Compile
+        run: cmake --build build --config Release -- /m:1 /nr:false
+      - name: Run encoding and mock-host tests
+        run: ctest --test-dir build -C Release --output-on-failure --timeout 45
+      - name: Package runtime files only
+        shell: pwsh
+        run: ./scripts/package.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AE-Locale-Bridge-English-win64
+          path: dist/AE-Locale-Bridge-English-0.2.1-win64.zip
+          if-no-files-found: error

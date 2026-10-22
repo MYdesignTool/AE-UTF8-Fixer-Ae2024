@@ -5,6 +5,10 @@
 /x64/
 /Debug/
 /Release/
+/dist/
+# Vendor the buildable MinHook source and author/license files, not IDE projects.
+/third_party/minhook/build/
+/third_party/minhook/.github/
 *.user
 *.filters
 *.sln
