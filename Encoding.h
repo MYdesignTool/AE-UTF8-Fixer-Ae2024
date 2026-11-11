@@ -24,6 +24,9 @@ size_t UTF8Prefix(std::string_view text, size_t capacity) noexcept;
 // Stable process-lifetime storage; AE can retain popup and checkbox pointers.
 const char* Intern(std::string_view text);
 void RegisterDisplayText(std::string_view text);
+// Cached .aep text may still contain GBK bytes, without a plugin to normalize it.
+bool RegisterProjectDisplayText(std::string_view text, bool popup, SourceEncoding source,
+                                DecodeFn decode, EncodeFn encode);
 bool IsRegisteredDisplayText(std::string_view text);
 bool IsRegisteredWideDisplayText(std::wstring_view text);
 unsigned long long DecoderHitCount() noexcept;

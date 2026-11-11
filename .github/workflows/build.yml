@@ -24,5 +24,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: AE-Locale-Bridge-win64
-          path: dist/AE-Locale-Bridge-0.2.3-win64.zip
+          path: dist/AE-Locale-Bridge-0.2.4-rc.1-win64.zip
           if-no-files-found: error

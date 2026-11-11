@@ -2,6 +2,14 @@
 
 The initial AE-UTF8-Fixer implementation is by AdoreLowen. This fork preserves the original MIT notice and history; entries below describe derivative work.
 
+## 0.2.4-rc.1 — 2026-11-11 (prerelease)
+
+- Add read-only registration of cached effect UI text before AE reads `.aep` / `.aet` files, covering Missing effects that have no plugin callbacks. Recover recognized GBK parameter names and supported popup/checkbox/button labels through the existing text bridge.
+- Limit scanning to validated RIFX/Egg! parameter tables, with bounded nesting, chunk counts, field sizes and file size. Ignore paths, expressions, match names, parameter values and trailing metadata. Preserve original file bytes, handles and read positions.
+- Add `ProjectTextBridge=1` (also the missing-INI default); set it to `0` to disable the project cache path independently of the legacy bridge. Keep the AE 2024+ and Chinese/English gates.
+- Preserve already-lost `??` menu entries. The supplied local sample contains original GBK parameter names but some popup and checkbox labels have already been replaced by literal question marks.
+- Add parser corruption/truncation checks and full-DLL tests with no effect AEX installed, including Chinese/English, AE 26.2 and the pre-2024/disabled gates. Real AE display verification remains pending; no user project is distributed.
+
 ## 0.2.3 — 2026-10-22
 
 - Enable both Chinese and English AE 2024+ interfaces by default, including simplified/traditional Chinese language tags. Preserve `OnlyEnglish=1` as an optional restriction; the shipped INI and missing-INI default now use `OnlyEnglish=0`.

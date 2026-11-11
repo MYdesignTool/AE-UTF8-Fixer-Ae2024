@@ -6,11 +6,13 @@
 #include "AE_GeneralPlug.h"
 #include "AE_PluginData.h"
 #include "Encoding.h"
+#include "ProjectText.h"
 #include "MinHook.h"
 #include <tlhelp32.h>
 #include <array>
 #include <atomic>
 #include <cstring>
+#include <cstdint>
 #include <mutex>
 #include <string>
 #include <stdexcept>
@@ -21,12 +23,16 @@
 namespace {
 HMODULE self_module{};
 bridge::SourceEncoding source_encoding = bridge::SourceEncoding::Auto;
-bool legacy_bridge{}, enabled{}, only_english{};
+bool legacy_bridge{}, enabled{}, only_english{}, project_text_bridge = true;
 bridge::DecodeFn original_decode = &MultiByteToWideChar;
 bridge::EncodeFn original_encode = &WideCharToMultiByte;
 decltype(&LoadLibraryW) original_load{};
 decltype(&LoadLibraryExW) original_load_ex{};
 decltype(&GetProcAddress) original_get_proc = &GetProcAddress;
+decltype(&CreateFileW) original_create_file_w = &CreateFileW;
+decltype(&CreateFileA) original_create_file_a = &CreateFileA;
+thread_local bool reading_project{};
+std::atomic<unsigned> project_scans{}, project_texts{};
 std::atomic<unsigned> normalized_count{}, failed_hooks{};
 std::atomic<unsigned> popup_placeholder_lists{};
 thread_local bool scanning{};
@@ -102,6 +108,7 @@ void ReadSettings(bridge::HostVersion host) {
     log_path = std::wstring(temp) + L"AE-Locale-Bridge-" + std::to_wstring(GetCurrentProcessId()) + L".log";
     enabled = ConfigValue(L"Enabled", L"1") == L"1";
     only_english = ConfigValue(L"OnlyEnglish", L"0") == L"1";
+    project_text_bridge = ConfigValue(L"ProjectTextBridge", L"1") == L"1";
     const auto source = ConfigValue(L"SourceEncoding", L"auto");
     if (source == L"gbk") source_encoding = bridge::SourceEncoding::GBK;
     else if (source == L"utf8") source_encoding = bridge::SourceEncoding::UTF8;
@@ -113,7 +120,7 @@ void ReadSettings(bridge::HostVersion host) {
     else if (mode != L"auto") { enabled = false; Log("Invalid LegacyBridge; disabled."); }
     legacy_bridge = bridge::UseLegacyBridge(host, policy);
     char msg[200]{};
-    sprintf_s(msg, "AE Locale Bridge 0.2.3; host=%u.%u.%u; ACP=%u; OEMCP=%u; legacy=%u",
+    sprintf_s(msg, "AE Locale Bridge 0.2.4-rc.1; host=%u.%u.%u; ACP=%u; OEMCP=%u; legacy=%u",
               host.major, host.minor, host.patch, GetACP(), GetOEMCP(), legacy_bridge);
     Log(msg);
 }
@@ -475,6 +482,71 @@ FARPROC WINAPI FixedGetProc(HMODULE module, LPCSTR name) {
     HookModule(module);
     return original_get_proc(module, name);
 }
+template<typename C> bool IsProjectPath(const C* path) noexcept {
+    if (!path) return false;
+    size_t n{};
+    while (n < 32768 && path[n]) ++n;
+    if (n < 4 || n == 32768 || path[n-4] != '.') return false;
+    const auto lower = [](C c) { return c >= 'A' && c <= 'Z' ? c + ('a'-'A') : c; };
+    return lower(path[n-3]) == 'a' && lower(path[n-2]) == 'e' &&
+           (lower(path[n-1]) == 'p' || lower(path[n-1]) == 't');
+}
+void ReadProjectCache(HANDLE file) noexcept {
+    if (file == INVALID_HANDLE_VALUE || reading_project) return;
+    reading_project = true;
+    HANDLE mapping{}; const unsigned char* view{};
+    try {
+        LARGE_INTEGER size{};
+        if (GetFileSizeEx(file, &size) && size.QuadPart >= 12 && size.QuadPart <= 256ll*1024*1024) {
+            mapping = CreateFileMappingW(file, nullptr, PAGE_READONLY, 0, 0, nullptr);
+            if (mapping) view = static_cast<const unsigned char*>(MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0));
+            if (view) {
+                // A shared file can be truncated by another process. ReadProcessMemory
+                // handles inaccessible mapped pages without raising an AV in the host.
+                unsigned char header[12]{}; SIZE_T copied{};
+                std::vector<unsigned char> snapshot;
+                if (ReadProcessMemory(GetCurrentProcess(), view, header, sizeof(header), &copied) &&
+                    copied == sizeof(header) && !std::memcmp(header, "RIFX", 4) && !std::memcmp(header+8, "Egg!", 4)) {
+                    const auto n = uint32_t(header[4]) << 24 | uint32_t(header[5]) << 16 |
+                                   uint32_t(header[6]) << 8 | header[7];
+                    if (n >= 4 && n <= static_cast<size_t>(size.QuadPart)-8) {
+                        snapshot.resize(size_t(n)+8);
+                        if (!ReadProcessMemory(GetCurrentProcess(), view, snapshot.data(), snapshot.size(), &copied) ||
+                            copied != snapshot.size()) snapshot.clear();
+                    }
+                }
+                auto cache = bridge::ReadProjectDisplayTexts(snapshot);
+                if (cache.valid) {
+                    ++project_scans;
+                    for (const auto& text : cache.texts) {
+                        if (text.popup) InspectPopupSource(text.bytes.c_str());
+                        if (bridge::RegisterProjectDisplayText(text.bytes, text.popup, source_encoding,
+                                                              original_decode, original_encode)) ++project_texts;
+                    }
+                }
+            }
+        }
+    } catch (...) { Log("Project text cache scan failed; file remains unchanged."); }
+    if (view) UnmapViewOfFile(view);
+    if (mapping) CloseHandle(mapping);
+    reading_project = false;
+}
+HANDLE WINAPI FixedCreateFileW(LPCWSTR path, DWORD access, DWORD share, LPSECURITY_ATTRIBUTES security,
+                               DWORD disposition, DWORD flags, HANDLE template_file) {
+    auto file = original_create_file_w(path, access, share, security, disposition, flags, template_file);
+    const auto after = GetLastError();
+    if (project_text_bridge && disposition == OPEN_EXISTING && (access & GENERIC_READ) && IsProjectPath(path)) ReadProjectCache(file);
+    SetLastError(after);
+    return file;
+}
+HANDLE WINAPI FixedCreateFileA(LPCSTR path, DWORD access, DWORD share, LPSECURITY_ATTRIBUTES security,
+                               DWORD disposition, DWORD flags, HANDLE template_file) {
+    auto file = original_create_file_a(path, access, share, security, disposition, flags, template_file);
+    const auto after = GetLastError();
+    if (project_text_bridge && disposition == OPEN_EXISTING && (access & GENERIC_READ) && IsProjectPath(path)) ReadProjectCache(file);
+    SetLastError(after);
+    return file;
+}
 int WINAPI FixedDecode(UINT cp, DWORD flags, LPCCH input, int count, LPWSTR output, int capacity) {
     try {
         auto forward = +[](UINT codepage, DWORD f, LPCCH s, int n, LPWSTR w, int c) -> int {
@@ -482,7 +554,7 @@ int WINAPI FixedDecode(UINT cp, DWORD flags, LPCCH input, int count, LPWSTR outp
         };
         // Do not change LastError merely by inspecting an unrelated conversion.
         const auto saved = GetLastError();
-        auto result = bridge::DecodeDisplayText(forward, cp, flags, input, count, output, capacity, legacy_bridge);
+        auto result = bridge::DecodeDisplayText(forward, cp, flags, input, count, output, capacity, legacy_bridge || project_text_bridge);
         if (result) SetLastError(saved);
         return result;
     } catch (...) { return original_decode(cp, flags, input, count, output, capacity); }
@@ -491,22 +563,28 @@ int WINAPI FixedEncode(UINT cp, DWORD flags, LPCWCH input, int count, LPSTR outp
                        int capacity, LPCCH default_char, LPBOOL used_default_char) {
     try {
         return bridge::EncodeDisplayText(original_encode, cp, flags, input, count, output,
-                                          capacity, default_char, used_default_char, legacy_bridge);
+                                          capacity, default_char, used_default_char, legacy_bridge || project_text_bridge);
     } catch (...) {
         return original_encode(cp, flags, input, count, output, capacity, default_char, used_default_char);
     }
 }
 void InstallHostHooks(SPBasicSuite* basic) {
     std::lock_guard lock(hook_mutex);
-    if (legacy_bridge && !Install(reinterpret_cast<void*>(&MultiByteToWideChar), reinterpret_cast<void*>(&FixedDecode),
+    if ((legacy_bridge || project_text_bridge) && !Install(reinterpret_cast<void*>(&MultiByteToWideChar), reinterpret_cast<void*>(&FixedDecode),
         [](void* p) { original_decode = reinterpret_cast<bridge::DecodeFn>(p); })) {
         Log("Legacy decoder hook failed; disabled.");
         enabled = false;
         return;
     }
-    if (legacy_bridge && !Install(reinterpret_cast<void*>(&WideCharToMultiByte), reinterpret_cast<void*>(&FixedEncode),
+    if ((legacy_bridge || project_text_bridge) && !Install(reinterpret_cast<void*>(&WideCharToMultiByte), reinterpret_cast<void*>(&FixedEncode),
         [](void* p) { original_encode = reinterpret_cast<bridge::EncodeFn>(p); }))
         Log("Legacy menu encoder hook failed; decoder bridge remains active.");
+    if (project_text_bridge) {
+        Install(reinterpret_cast<void*>(&CreateFileW), reinterpret_cast<void*>(&FixedCreateFileW),
+            [](void* p) { original_create_file_w = reinterpret_cast<decltype(original_create_file_w)>(p); });
+        Install(reinterpret_cast<void*>(&CreateFileA), reinterpret_cast<void*>(&FixedCreateFileA),
+            [](void* p) { original_create_file_a = reinterpret_cast<decltype(original_create_file_a)>(p); });
+    }
     const PF_ParamUtilsSuite3* suite{};
     if (basic && !basic->AcquireSuite(kPFParamUtilsSuite, kPFParamUtilsSuiteVersion3, reinterpret_cast<const void**>(&suite)) && suite) {
         Install(reinterpret_cast<void*>(suite->PF_UpdateParamUI), reinterpret_cast<void*>(&FixedUpdate),
@@ -528,9 +606,9 @@ void InstallHostHooks(SPBasicSuite* basic) {
 }
 A_Err OnDeath(AEGP_GlobalRefcon, AEGP_DeathRefcon) {
     char message[400]{};
-    sprintf_s(message, "Shutdown; normalized=%u; decoder_hits=%llu; encoder_hits=%llu; encoder_buffer_failures=%llu; popup_placeholder_lists=%u; effects=%zu; add_callbacks=%zu; registration2=%zu; registration1=%zu; hook_failures=%u",
+    sprintf_s(message, "Shutdown; normalized=%u; decoder_hits=%llu; encoder_hits=%llu; encoder_buffer_failures=%llu; popup_placeholder_lists=%u; effects=%zu; add_callbacks=%zu; registration2=%zu; registration1=%zu; hook_failures=%u; project_scans=%u; project_texts=%u",
         normalized_count.load(), bridge::DecoderHitCount(), bridge::EncoderHitCount(), bridge::EncoderBufferFailureCount(),
-        popup_placeholder_lists.load(), effect_count, add_count, reg2_count, reg1_count, failed_hooks.load());
+        popup_placeholder_lists.load(), effect_count, add_count, reg2_count, reg1_count, failed_hooks.load(), project_scans.load(), project_texts.load());
     Log(message);
     // Keep hooks valid through shutdown: other plugins can still call them.
     // No MH_ALL_HOOKS, uninitialize or thread suspension from DllMain.

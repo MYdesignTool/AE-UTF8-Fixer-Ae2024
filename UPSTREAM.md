@@ -15,3 +15,7 @@ Changes in 0.2.1: prevent lossy ANSI re-encoding of registered Chinese display t
 Changes in 0.2.2: mixed-menu encoding handling, Options/effect-title/About/error text coverage, failed-hook pointer rollback and wrapper-pool accounting, deterministic input/API stress tests and expanded mock-host regressions. Original author and dependency ownership remain as above.
 
 Changes in 0.2.3: default Chinese and English AE 2024+ activation, bounded language detection, pre-2024 bridge exclusion, isolated per-case configuration tests and Chinese/Western code-page mock-host coverage. Maintained by MYdesignTool with original author attribution and license retained.
+
+Changes in 0.2.4-rc.1: read-only RIFX cached parameter text registration for Missing effects, project-specific GBK/UTF-8 aliases, bounded parser and no-effect-DLL mock-host tests. Implemented by MYdesignTool; original author and dependency ownership remain unchanged. No third-party parser source or user project is included.
+
+Project cache format research consulted the [py_aep format notes](https://forticheprod.github.io/py-aep/file_format/). The bounded reader is independently implemented against locally verified chunk layouts; no py_aep code is vendored or required.

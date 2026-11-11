@@ -5,6 +5,7 @@
 #include <mutex>
 #include <shared_mutex>
 #include <unordered_set>
+#include <unordered_map>
 
 namespace bridge {
 static std::atomic<unsigned long long> decoder_hits{};
@@ -146,6 +147,7 @@ struct Store {
     std::shared_mutex mutex;
     std::unordered_set<std::string, Hash, std::equal_to<>> strings, display;
     std::unordered_set<std::wstring, WideHash, std::equal_to<>> wide_display;
+    std::unordered_map<std::string, std::string, Hash, std::equal_to<>> project_aliases;
 };
 static Store& Strings() { static auto* store = new Store; return *store; }
 const char* Intern(std::string_view s) {
@@ -167,6 +169,33 @@ void RegisterDisplayText(std::string_view s) {
     RegisterOneDisplayText(s);
     // One undecodable item must not prevent other valid Chinese items registering.
     ForEachPopupItem(s, [](std::string_view token) { RegisterOneDisplayText(token); });
+}
+bool RegisterProjectDisplayText(std::string_view text, bool popup, SourceEncoding source,
+                                DecodeFn decode, EncodeFn encode) {
+    bool registered{};
+    const auto add = [&](std::string_view raw, bool list) {
+        if (raw.empty() || raw.size() > 65535) return;
+        auto fixed = list ? NormalizePopup(raw, source, decode, encode) : Normalize(raw, source, decode, encode);
+        auto target = fixed.empty() ? raw : std::string_view(fixed);
+        if (!IsValidUTF8(target)) return;
+        auto wide = Decode(target, CP_UTF8, decode);
+        if (!ContainsHan(wide)) return;
+        auto& store = Strings();
+        std::unique_lock lock(store.mutex);
+        store.display.emplace(target);
+        store.wide_display.emplace(std::move(wide));
+        if (raw != target) store.project_aliases.emplace(std::string(raw), target);
+        registered = true;
+    };
+    add(text, popup);
+    if (popup) ForEachPopupItem(text, [&](std::string_view item) { add(item, false); });
+    return registered;
+}
+static std::string ProjectAlias(std::string_view text) {
+    auto& store = Strings();
+    std::shared_lock lock(store.mutex);
+    const auto found = store.project_aliases.find(text);
+    return found == store.project_aliases.end() ? std::string{} : found->second;
 }
 bool IsRegisteredDisplayText(std::string_view s) {
     auto& store = Strings();
@@ -194,6 +223,13 @@ int DecodeDisplayText(DecodeFn original, UINT cp, DWORD flags, LPCCH input, int 
         size_t n = count == -1 ? strnlen_s(input, 65536) : static_cast<size_t>(count);
         if (n && n <= 65535) {
             if (input[n-1] == '\0') --n;
+            const auto alias = ProjectAlias(std::string_view(input, n));
+            if (!alias.empty()) {
+                decoder_hits.fetch_add(1, std::memory_order_relaxed);
+                const bool terminated = count == -1 || (count > 0 && input[count-1] == '\0');
+                return original(CP_UTF8, flags & MB_ERR_INVALID_CHARS, alias.c_str(),
+                                static_cast<int>(alias.size()) + (terminated ? 1 : 0), output, capacity);
+            }
             if (IsRegisteredDisplayText(std::string_view(input, n))) {
                 decoder_hits.fetch_add(1, std::memory_order_relaxed);
                 return original(CP_UTF8, flags & MB_ERR_INVALID_CHARS, input, count, output, capacity);
