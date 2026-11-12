@@ -39,6 +39,10 @@ int wmain(int argc,wchar_t**argv) {
         for(const auto& t:scan.texts) CHECK(t.bytes.size()<=65535);
     }
     for(const auto& text:result.texts) RegisterProjectDisplayText(text.bytes,text.popup,SourceEncoding::Auto,&MultiByteToWideChar,&WideCharToMultiByte);
+    CHECK(IsRegisteredProjectAlias("\xB0\xEB\xBE\xB6"));
+    CHECK(!IsRegisteredProjectAlias("Unregistered text"));
+    CHECK(IsRegisteredProjectMojibake(L"\xB0\xEB\xBE\xB6"));
+    CHECK(!IsRegisteredProjectMojibake(L"Unregistered text"));
     wchar_t wide[64]{};
     CHECK(DecodeDisplayText(&MultiByteToWideChar,1252,0,"\xB0\xEB\xBE\xB6",-1,wide,64,true)==3);
     CHECK(std::wstring(wide)==L"\x534A\x5F84");

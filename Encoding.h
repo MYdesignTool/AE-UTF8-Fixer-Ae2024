@@ -27,6 +27,9 @@ void RegisterDisplayText(std::string_view text);
 // Cached .aep text may still contain GBK bytes, without a plugin to normalize it.
 bool RegisterProjectDisplayText(std::string_view text, bool popup, SourceEncoding source,
                                 DecodeFn decode, EncodeFn encode);
+// Read-only diagnostics; these do not enable additional conversions.
+bool IsRegisteredProjectAlias(std::string_view text);
+bool IsRegisteredProjectMojibake(std::wstring_view text);
 bool IsRegisteredDisplayText(std::string_view text);
 bool IsRegisteredWideDisplayText(std::wstring_view text);
 unsigned long long DecoderHitCount() noexcept;

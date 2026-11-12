@@ -19,3 +19,5 @@ Changes in 0.2.3: default Chinese and English AE 2024+ activation, bounded langu
 Changes in 0.2.4-rc.1: read-only RIFX cached parameter text registration for Missing effects, project-specific GBK/UTF-8 aliases, bounded parser and no-effect-DLL mock-host tests. Implemented by MYdesignTool; original author and dependency ownership remain unchanged. No third-party parser source or user project is included.
 
 Project cache format research consulted the [py_aep format notes](https://forticheprod.github.io/py-aep/file_format/). The bounded reader is independently implemented against locally verified chunk layouts; no py_aep code is vendored or required.
+
+Changes in 0.2.4-rc.2: file-specific read masks, OPEN_ALWAYS and CreateFile2 coverage, opt-in bounded stage diagnostics and native open-path regressions. This diagnostic work is maintained by MYdesignTool. Real-host Missing repair remains unconfirmed following the user's rc.1 failure report.

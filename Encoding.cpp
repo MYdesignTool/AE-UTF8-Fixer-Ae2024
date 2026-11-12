@@ -148,6 +148,7 @@ struct Store {
     std::unordered_set<std::string, Hash, std::equal_to<>> strings, display;
     std::unordered_set<std::wstring, WideHash, std::equal_to<>> wide_display;
     std::unordered_map<std::string, std::string, Hash, std::equal_to<>> project_aliases;
+    std::unordered_set<std::wstring, WideHash, std::equal_to<>> project_mojibake;
 };
 static Store& Strings() { static auto* store = new Store; return *store; }
 const char* Intern(std::string_view s) {
@@ -180,11 +181,13 @@ bool RegisterProjectDisplayText(std::string_view text, bool popup, SourceEncodin
         if (!IsValidUTF8(target)) return;
         auto wide = Decode(target, CP_UTF8, decode);
         if (!ContainsHan(wide)) return;
+        auto western = raw != target ? Decode(raw, 1252, decode) : std::wstring{};
         auto& store = Strings();
         std::unique_lock lock(store.mutex);
         store.display.emplace(target);
         store.wide_display.emplace(std::move(wide));
         if (raw != target) store.project_aliases.emplace(std::string(raw), target);
+        if (!western.empty()) store.project_mojibake.emplace(std::move(western));
         registered = true;
     };
     add(text, popup);
@@ -196,6 +199,16 @@ static std::string ProjectAlias(std::string_view text) {
     std::shared_lock lock(store.mutex);
     const auto found = store.project_aliases.find(text);
     return found == store.project_aliases.end() ? std::string{} : found->second;
+}
+bool IsRegisteredProjectAlias(std::string_view text) {
+    auto& store = Strings();
+    std::shared_lock lock(store.mutex);
+    return store.project_aliases.find(text) != store.project_aliases.end();
+}
+bool IsRegisteredProjectMojibake(std::wstring_view text) {
+    auto& store = Strings();
+    std::shared_lock lock(store.mutex);
+    return store.project_mojibake.find(text) != store.project_mojibake.end();
 }
 bool IsRegisteredDisplayText(std::string_view s) {
     auto& store = Strings();

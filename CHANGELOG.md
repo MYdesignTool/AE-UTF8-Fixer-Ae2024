@@ -2,6 +2,13 @@
 
 The initial AE-UTF8-Fixer implementation is by AdoreLowen. This fork preserves the original MIT notice and history; entries below describe derivative work.
 
+## 0.2.4-rc.2 — 2026-11-12 (diagnostic prerelease)
+
+- User testing of rc.1 in English AE 24.6.2 reported no Missing display improvement; the supplied run logged zero successful project scans and registered project fields. The real-host issue is still unresolved.
+- Fix an independently reproduced coverage gap: permit file-specific read access masks and read-capable `OPEN_ALWAYS`, rather than requiring only `GENERIC_READ` / `OPEN_EXISTING`. Add `CreateFile2` coverage alongside the existing A/W APIs.
+- Add opt-in `ProjectDiagnostics` stage logging: hook installation, project opens, scan outcomes and registered byte/Unicode-mojibake observations with code page, flags and lengths. No extra conversion rules, directory scans, project paths or raw UI text are introduced by diagnostics. Shipped diagnostic INI enables it; absent key defaults off.
+- Add native file access regressions and trace-output checks. These validate the new coverage and diagnostics; they do not establish that the user's real AE path is fixed.
+
 ## 0.2.4-rc.1 — 2026-11-11 (prerelease)
 
 - Add read-only registration of cached effect UI text before AE reads `.aep` / `.aet` files, covering Missing effects that have no plugin callbacks. Recover recognized GBK parameter names and supported popup/checkbox/button labels through the existing text bridge.

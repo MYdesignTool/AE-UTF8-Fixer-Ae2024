@@ -13,6 +13,8 @@ namespace {
 PFAppSuite6 app{};
 AEGP_RegisterSuite5 registration{};
 const char* ui="en_US";
+DWORD open_access=GENERIC_READ,open_disposition=OPEN_EXISTING;
+bool open_create2{};
 PF_Err Language(A_char* out) {strcpy_s(out,PF_APP_LANG_TAG_SIZE,ui);return PF_Err_NONE;}
 A_Err Death(AEGP_PluginID,AEGP_DeathHook,AEGP_DeathRefcon) {return A_Err_NONE;}
 SPErr Acquire(const char* name,int32 version,const void** out) {
@@ -30,8 +32,9 @@ bool Write(const std::filesystem::path& path,const fixture::Bytes& bytes) {
 }
 bool ReadUnchanged(const std::filesystem::path& path,const fixture::Bytes& original,bool ansi=false) {
     const auto narrow=path.string();
-    auto h=ansi?CreateFileA(narrow.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,0,nullptr)
-               :CreateFileW(path.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,0,nullptr);
+    auto h=open_create2?CreateFile2(path.c_str(),open_access,FILE_SHARE_READ,open_disposition,nullptr)
+         :ansi?CreateFileA(narrow.c_str(),open_access,FILE_SHARE_READ,nullptr,open_disposition,0,nullptr)
+              :CreateFileW(path.c_str(),open_access,FILE_SHARE_READ,nullptr,open_disposition,0,nullptr);
     if(h==INVALID_HANDLE_VALUE)return false;
     LARGE_INTEGER zero{},pos{};
     bool ok=SetFilePointerEx(h,zero,&pos,FILE_CURRENT)&&pos.QuadPart==0;
@@ -44,6 +47,12 @@ int wmain(int argc,wchar_t**argv) {
     int checks{};
     CHECK(argc==5||argc==6);
     const bool active=std::wstring(argv[3])==L"1";
+    char style[40]{};
+    if(GetEnvironmentVariableA("AE_BRIDGE_TEST_OPEN_STYLE",style,sizeof(style))) {
+        if(!std::strcmp(style,"specific"))open_access=FILE_GENERIC_READ;
+        else if(!std::strcmp(style,"open_always"))open_disposition=OPEN_ALWAYS;
+        else if(!std::strcmp(style,"create2"))open_create2=true;
+    }
     if(std::wstring(argv[4])==L"zh_CN")ui="zh_CN";
     const std::filesystem::path directory(argv[2]);
     std::filesystem::create_directories(directory);
@@ -72,6 +81,11 @@ int wmain(int argc,wchar_t**argv) {
     CHECK(ReadUnchanged(widepath,sample));
     CHECK(MultiByteToWideChar(1252,0,"\xB0\xEB\xBE\xB6",-1,text,100)==(active?3:5));
     CHECK(std::wstring(text)==(active?L"\x534A\x5F84":L"\xB0\xEB\xBE\xB6"));
+    char observed[64]{};
+    CHECK(WideCharToMultiByte(CP_UTF8,0,L"\xB0\xEB\xBE\xB6",-1,observed,64,nullptr,nullptr)>0);
+    CHECK(MultiByteToWideChar(1252,0,"\xB0\xEB\xBE\xB6",-1,text,100)==(active?3:5));
+    // Logging a known mojibake string must not repair unrelated UTF-8 encodes.
+    CHECK(!std::strcmp(observed,"\xC2\xB0\xC3\xAB\xC2\xBE\xC2\xB6"));
     CHECK(MultiByteToWideChar(936,0,"\xB0\xEB\xBE\xB6",-1,text,100)==3&&std::wstring(text)==L"\x534A\x5F84");
     CHECK(MultiByteToWideChar(1252,0,"\xCC\xED\xBC\xD3",-1,text,100)==(active?3:5));
     CHECK(!active||std::wstring(text)==L"\x6DFB\x52A0");
@@ -92,6 +106,20 @@ int wmain(int argc,wchar_t**argv) {
         CHECK(ReadUnchanged(argv[5],actual));
         CHECK(MultiByteToWideChar(1252,0,threshold,-1,text,100)==(active?6:11));
         CHECK(!active||std::wstring(text)==L"\x9608\x503C\x5E73\x6ED1\x5EA6");
+    }
+    if(active) {
+        wchar_t temp[32768]{};CHECK(GetTempPathW(32768,temp)>0);
+        auto log=std::filesystem::path(temp)/(L"AE-Locale-Bridge-"+std::to_wstring(GetCurrentProcessId())+L".log");
+        std::ifstream input(log,std::ios::binary);
+        const std::string contents((std::istreambuf_iterator<char>(input)),{});
+        // Only assert trace output when this test's INI explicitly enabled it.
+        if(contents.find("diagnostics=1")!=contents.npos) {
+            CHECK(contents.find("Project file hooks;")!=contents.npos);
+            CHECK(contents.find("Project scan; stage=registered;")!=contents.npos);
+            CHECK(contents.find("Project decoder observed;")!=contents.npos);
+            CHECK(contents.find("Project mojibake encoder observed;")!=contents.npos);
+            CHECK(contents.find("cached.AEP")==contents.npos);
+        }
     }
     std::printf("PASS: %d missing-host checks; UI=%s; project_bridge=%d; no effect DLL; original bytes and file position preserved.\n",checks,ui,active);
 }

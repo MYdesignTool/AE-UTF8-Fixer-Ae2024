@@ -1,0 +1,70 @@
+0.2.4-rc.2 diagnostic Release x64 validation; 2026-11-12
+May 2023 SDK: 32/32 tests passed
+PASS: 16509 project cache checks.
+PASS: 30 missing-host checks; UI=en_US; project_bridge=1; no effect DLL; original bytes and file position preserved.
+PASS: 30 missing-host checks; UI=zh_CN; project_bridge=1; no effect DLL; original bytes and file position preserved.
+PASS: 30 missing-host checks; UI=en_US; project_bridge=1; no effect DLL; original bytes and file position preserved.
+PASS: 24 missing-host checks; UI=en_US; project_bridge=0; no effect DLL; original bytes and file position preserved.
+PASS: 24 missing-host checks; UI=en_US; project_bridge=0; no effect DLL; original bytes and file position preserved.
+PASS: 30 missing-host checks; UI=en_US; project_bridge=1; no effect DLL; original bytes and file position preserved.
+PASS: 30 missing-host checks; UI=en_US; project_bridge=1; no effect DLL; original bytes and file position preserved.
+PASS: 30 missing-host checks; UI=en_US; project_bridge=1; no effect DLL; original bytes and file position preserved.
+PASS: 73 encoding checks, 8 concurrent registry/cache workers.
+PASS: 20480 checks across 4096 deterministic malformed-input/native-API cases.
+PASS: 135 popup checks, 14 menu entries, ANSI question-mark reproduction, 8 concurrent workers.
+PASS: 44 SDK parameter checks, including 14 guarded allocation layouts.
+PASS: 113 hook lifecycle checks, failure rollback, retry and duplicate-target handling.
+PASS: 53 mock-host checks; AE=24.6.2; UI=en_US; text_cp=1252; active=1; legacy=1; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=26.2.0; UI=en_US; text_cp=1252; active=1; legacy=0; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=23.6.0; UI=en_US; text_cp=1252; active=0; legacy=0; adds=804; updates=1.
+PASS: 53 mock-host checks; AE=24.6.2; UI=zh_CN; text_cp=936; active=1; legacy=1; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=24.6.2; UI=zh_CN; text_cp=1252; active=1; legacy=1; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=24.6.2; UI=zh_TW; text_cp=936; active=1; legacy=1; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=26.2.0; UI=zh_CN; text_cp=936; active=1; legacy=0; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=23.6.0; UI=zh_CN; text_cp=936; active=0; legacy=0; adds=804; updates=1.
+PASS: 53 mock-host checks; AE=23.6.0; UI=zh_CN; text_cp=936; active=0; legacy=0; adds=804; updates=1.
+PASS: 53 mock-host checks; AE=24.6.2; UI=en_US; text_cp=1252; active=1; legacy=1; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=24.6.2; UI=zh_CN; text_cp=936; active=1; legacy=1; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=24.6.2; UI=en_US; text_cp=1252; active=1; legacy=1; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=24.6.2; UI=zh_CN; text_cp=936; active=0; legacy=0; adds=804; updates=1.
+PASS: 53 mock-host checks; AE=24.6.2; UI=ja_JP; text_cp=932; active=0; legacy=0; adds=804; updates=1.
+PASS: 58 mock-host checks; AE=24.6.2; UI=zh_CN; text_cp=936; active=0; legacy=0; adds=804; updates=1.
+PASS: 56 mock-host checks; AE=24.6.2; UI=zh_CN; text_cp=936; active=0; legacy=0; adds=804; updates=1.
+PASS: 55 mock-host checks; AE=24.6.2; UI=zh_CN; text_cp=936; active=0; legacy=0; adds=804; updates=1.
+PASS: 63 mock-host checks; AE=24.6.2; UI=zh_CN; text_cp=936; active=0; legacy=0; adds=804; updates=1.
+Repository AE_SDK: 32/32 tests passed
+PASS: 16509 project cache checks.
+PASS: 30 missing-host checks; UI=en_US; project_bridge=1; no effect DLL; original bytes and file position preserved.
+PASS: 30 missing-host checks; UI=zh_CN; project_bridge=1; no effect DLL; original bytes and file position preserved.
+PASS: 30 missing-host checks; UI=en_US; project_bridge=1; no effect DLL; original bytes and file position preserved.
+PASS: 24 missing-host checks; UI=en_US; project_bridge=0; no effect DLL; original bytes and file position preserved.
+PASS: 24 missing-host checks; UI=en_US; project_bridge=0; no effect DLL; original bytes and file position preserved.
+PASS: 30 missing-host checks; UI=en_US; project_bridge=1; no effect DLL; original bytes and file position preserved.
+PASS: 30 missing-host checks; UI=en_US; project_bridge=1; no effect DLL; original bytes and file position preserved.
+PASS: 30 missing-host checks; UI=en_US; project_bridge=1; no effect DLL; original bytes and file position preserved.
+PASS: 73 encoding checks, 8 concurrent registry/cache workers.
+PASS: 20480 checks across 4096 deterministic malformed-input/native-API cases.
+PASS: 135 popup checks, 14 menu entries, ANSI question-mark reproduction, 8 concurrent workers.
+PASS: 44 SDK parameter checks, including 14 guarded allocation layouts.
+PASS: 113 hook lifecycle checks, failure rollback, retry and duplicate-target handling.
+PASS: 53 mock-host checks; AE=24.6.2; UI=en_US; text_cp=1252; active=1; legacy=1; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=26.2.0; UI=en_US; text_cp=1252; active=1; legacy=0; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=23.6.0; UI=en_US; text_cp=1252; active=0; legacy=0; adds=804; updates=1.
+PASS: 53 mock-host checks; AE=24.6.2; UI=zh_CN; text_cp=936; active=1; legacy=1; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=24.6.2; UI=zh_CN; text_cp=1252; active=1; legacy=1; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=24.6.2; UI=zh_TW; text_cp=936; active=1; legacy=1; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=26.2.0; UI=zh_CN; text_cp=936; active=1; legacy=0; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=23.6.0; UI=zh_CN; text_cp=936; active=0; legacy=0; adds=804; updates=1.
+PASS: 53 mock-host checks; AE=23.6.0; UI=zh_CN; text_cp=936; active=0; legacy=0; adds=804; updates=1.
+PASS: 53 mock-host checks; AE=24.6.2; UI=en_US; text_cp=1252; active=1; legacy=1; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=24.6.2; UI=zh_CN; text_cp=936; active=1; legacy=1; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=24.6.2; UI=en_US; text_cp=1252; active=1; legacy=1; adds=804; updates=2.
+PASS: 53 mock-host checks; AE=24.6.2; UI=zh_CN; text_cp=936; active=0; legacy=0; adds=804; updates=1.
+PASS: 53 mock-host checks; AE=24.6.2; UI=ja_JP; text_cp=932; active=0; legacy=0; adds=804; updates=1.
+PASS: 58 mock-host checks; AE=24.6.2; UI=zh_CN; text_cp=936; active=0; legacy=0; adds=804; updates=1.
+PASS: 56 mock-host checks; AE=24.6.2; UI=zh_CN; text_cp=936; active=0; legacy=0; adds=804; updates=1.
+PASS: 55 mock-host checks; AE=24.6.2; UI=zh_CN; text_cp=936; active=0; legacy=0; adds=804; updates=1.
+PASS: 63 mock-host checks; AE=24.6.2; UI=zh_CN; text_cp=936; active=0; legacy=0; adds=804; updates=1.
+Previously published rc.1 fails new FILE_GENERIC_READ Missing test as expected; rc.2 passes.
+User rc.1 run: AE 24.6.2 en_US ACP/OEMCP=936, project_scans=0, project_texts=0, decoder_hits=0.
+Real-host Missing repair remains unconfirmed. No directory scans or commercial plugin binary tests.
